@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getGroups, assignUserToGroup, createUser } from '../lib/api';
+import { getGroups, assignUserToGroup, createUser, getUserDetails, deleteUser } from '../lib/api';
 import { axiosWithAuth } from '../lib/auth';
 import Router from 'next/router';
 import { getToken, logout } from '../lib/auth';
@@ -16,6 +16,13 @@ interface Group {
   name: string;
 }
 
+interface UserDetail {
+  id: number;
+  username: string;
+  role: string;
+  groups?: Array<{ id: number; name: string }>;
+}
+
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -28,6 +35,9 @@ export default function UsersPage() {
   const [newPassword, setNewPassword] = useState('');
   const [newRole, setNewRole] = useState('user');
   const [showCreateForm, setShowCreateForm] = useState(false);
+
+  const [selectedUser, setSelectedUser] = useState<UserDetail | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
     const t = getToken();
@@ -114,6 +124,67 @@ export default function UsersPage() {
     } catch (err: any) {
       console.error('Failed to assign group:', err);
       setError(err?.response?.data?.error || 'Failed to assign user to group');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleViewDetails(userId: number) {
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+    
+    // Find the user from the existing list first
+    const user = users.find(u => u.id === userId);
+    
+    try {
+      const details = await getUserDetails(userId);
+      console.log('User details received:', details);
+      
+      const userDetail: UserDetail = {
+        id: details.id || userId,
+        username: details.username || user?.username || '',
+        role: details.role || user?.role || 'user',
+        groups: details.groups || []
+      };
+      
+      setSelectedUser(userDetail);
+      setShowDetails(true);
+    } catch (err: any) {
+      console.error('Failed to fetch user details:', err);
+      
+      // Fallback: Show basic user info if detailed endpoint fails
+      if (user) {
+        console.log('Using fallback user info');
+        const userDetail: UserDetail = {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          groups: [] // We don't have group info from the basic user list
+        };
+        setSelectedUser(userDetail);
+        setShowDetails(true);
+        
+        // Show a warning that group info is not available
+        setError('Note: Group information is not available. The user details endpoint may not be fully implemented.');
+        setTimeout(() => setError(null), 5000);
+      } else {
+        let errorMessage = 'Failed to load user details';
+        if (err?.response) {
+          if (err.response.status === 404) {
+            errorMessage = 'User not found or endpoint not available';
+          } else if (err.response.status === 403) {
+            errorMessage = 'You do not have permission to view user details';
+          } else if (err.response.data?.error) {
+            errorMessage = err.response.data.error;
+          } else if (err.response.data?.message) {
+            errorMessage = err.response.data.message;
+          }
+        } else if (err?.message) {
+          errorMessage = err.message;
+        }
+        setError(errorMessage);
+      }
     } finally {
       setLoading(false);
     }
@@ -510,6 +581,99 @@ export default function UsersPage() {
           )}
         </div>
 
+        {/* User Details Modal */}
+        {showDetails && selectedUser && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px'
+          }} onClick={() => setShowDetails(false)}>
+            <div style={{
+              backgroundColor: 'white',
+              borderRadius: '12px',
+              maxWidth: '600px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflow: 'auto',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+            }} onClick={(e) => e.stopPropagation()}>
+              <div style={{
+                padding: '20px 24px',
+                borderBottom: '1px solid #e5e7eb',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}>
+                <h2 style={{ fontSize: '20px', fontWeight: 600, color: '#111827', margin: 0 }}>
+                  User: {selectedUser.username}
+                </h2>
+                <button
+                  onClick={() => setShowDetails(false)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: '24px',
+                    color: '#6b7280',
+                    cursor: 'pointer',
+                    padding: '4px 8px'
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div style={{ padding: '24px' }}>
+                <div style={{ marginBottom: '24px' }}>
+                  <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>Role</div>
+                  <span style={{
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    backgroundColor: selectedUser.role === 'admin' ? '#dbeafe' : '#f3f4f6',
+                    color: selectedUser.role === 'admin' ? '#1e40af' : '#374151'
+                  }}>
+                    {selectedUser.role}
+                  </span>
+                </div>
+
+                <div>
+                  <h3 style={{ fontSize: '16px', fontWeight: 600, color: '#111827', marginBottom: '16px' }}>
+                    Groups ({selectedUser.groups?.length || 0})
+                  </h3>
+                  {selectedUser.groups && selectedUser.groups.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {selectedUser.groups.map((group) => (
+                        <div key={group.id} style={{
+                          padding: '12px 16px',
+                          backgroundColor: '#f9fafb',
+                          borderRadius: '8px',
+                          border: '1px solid #e5e7eb',
+                          fontSize: '14px',
+                          fontWeight: 500,
+                          color: '#111827'
+                        }}>
+                          {group.name}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p style={{ color: '#6b7280', fontSize: '14px' }}>User is not assigned to any groups</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Users Table */}
         <div style={{
           backgroundColor: 'white',
@@ -547,6 +711,7 @@ export default function UsersPage() {
                   <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>Username</th>
                   <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>Role</th>
                   <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>Actions</th>
+                  <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>Remove</th>
                 </tr>
               </thead>
               <tbody>
@@ -567,33 +732,111 @@ export default function UsersPage() {
                       </span>
                     </td>
                     <td style={{ padding: '12px 16px' }}>
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        <button
+                          onClick={() => handleViewDetails(u.id)}
+                          disabled={loading}
+                          style={{
+                            padding: '6px 12px',
+                            fontSize: '13px',
+                            fontWeight: 500,
+                            color: loading ? '#9ca3af' : '#4f46e5',
+                            backgroundColor: 'transparent',
+                            border: '1px solid',
+                            borderColor: loading ? '#d1d5db' : '#4f46e5',
+                            borderRadius: '6px',
+                            cursor: loading ? 'not-allowed' : 'pointer',
+                            transition: 'all 0.2s'
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!loading) {
+                              e.currentTarget.style.backgroundColor = '#eef2ff';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!loading) {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }
+                          }}
+                        >
+                          View Details
+                        </button>
+                        <button
+                          onClick={() => handleAssignGroup(u.id, u.username)}
+                          disabled={loading || groups.length === 0}
+                          style={{
+                            padding: '6px 12px',
+                            fontSize: '13px',
+                            fontWeight: 500,
+                            color: loading || groups.length === 0 ? '#9ca3af' : '#10b981',
+                            backgroundColor: 'transparent',
+                            border: '1px solid',
+                            borderColor: loading || groups.length === 0 ? '#d1d5db' : '#10b981',
+                            borderRadius: '6px',
+                            cursor: loading || groups.length === 0 ? 'not-allowed' : 'pointer',
+                            transition: 'all 0.2s'
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!loading && groups.length > 0) {
+                              e.currentTarget.style.backgroundColor = '#d1fae5';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!loading && groups.length > 0) {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }
+                          }}
+                        >
+                          Assign Group
+                        </button>
+                      </div>
+                    </td>
+                    <td style={{ padding: '12px 16px' }}>
                       <button
-                        onClick={() => handleAssignGroup(u.id, u.username)}
-                        disabled={loading || groups.length === 0}
+                        onClick={async () => {
+                          if (!confirm(`Are you sure you want to delete user "${u.username}"? This action cannot be undone.`)) return;
+                          
+                          setLoading(true);
+                          setError(null);
+                          setSuccess(null);
+                          
+                          try {
+                            await deleteUser(u.id);
+                            setSuccess(`User "${u.username}" deleted successfully!`);
+                            setTimeout(() => setSuccess(null), 3000);
+                            fetchUsers(); // Reload list
+                          } catch (e: any) {
+                            console.error('Failed to delete user:', e);
+                            setError(e?.response?.data?.error || e?.message || 'Failed to delete user');
+                          } finally {
+                            setLoading(false);
+                          }
+                        }}
+                        disabled={loading}
                         style={{
                           padding: '6px 12px',
                           fontSize: '13px',
                           fontWeight: 500,
-                          color: loading || groups.length === 0 ? '#9ca3af' : '#4f46e5',
+                          color: loading ? '#9ca3af' : '#dc2626',
                           backgroundColor: 'transparent',
                           border: '1px solid',
-                          borderColor: loading || groups.length === 0 ? '#d1d5db' : '#4f46e5',
+                          borderColor: loading ? '#d1d5db' : '#dc2626',
                           borderRadius: '6px',
-                          cursor: loading || groups.length === 0 ? 'not-allowed' : 'pointer',
+                          cursor: loading ? 'not-allowed' : 'pointer',
                           transition: 'all 0.2s'
                         }}
                         onMouseEnter={(e) => {
-                          if (!loading && groups.length > 0) {
-                            e.currentTarget.style.backgroundColor = '#eef2ff';
+                          if (!loading) {
+                            e.currentTarget.style.backgroundColor = '#fee2e2';
                           }
                         }}
                         onMouseLeave={(e) => {
-                          if (!loading && groups.length > 0) {
+                          if (!loading) {
                             e.currentTarget.style.backgroundColor = 'transparent';
                           }
                         }}
                       >
-                        Assign Group
+                        Delete
                       </button>
                     </td>
                   </tr>

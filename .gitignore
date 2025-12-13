@@ -10,3 +10,9 @@ yarn-error.log*
 .idea/
 *.log
 .next/
+.next/static/
+out/
+build/
+.cache/
+*.local
+*.tsbuildinfo
