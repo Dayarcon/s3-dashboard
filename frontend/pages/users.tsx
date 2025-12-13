@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { getGroups, assignUserToGroup, createUser } from '../lib/api';
 import { axiosWithAuth } from '../lib/auth';
 import Router from 'next/router';
-import { getToken } from '../lib/auth';
+import { getToken, logout } from '../lib/auth';
 import Link from 'next/link';
 
 interface User {
@@ -119,6 +119,11 @@ export default function UsersPage() {
     }
   }
 
+  const handleLogout = () => {
+    logout();
+    Router.push('/login');
+  };
+
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f9fafb' }}>
       {/* Header */}
@@ -204,11 +209,7 @@ export default function UsersPage() {
                 </div>
               )} */}
               <button
-                onClick={() => {
-                  // handleLogout is not defined in this file, so this button is commented out
-                  // This is a placeholder for a logout function
-                  alert('Logout functionality not implemented yet.');
-                }}
+                onClick={handleLogout}
                 style={{
                   display: 'flex',
                   alignItems: 'center',

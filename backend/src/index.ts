@@ -9,6 +9,7 @@ import { ensureSuperAdminFromEnv } from './db';
 import { authMiddleware } from './middleware/authMiddleware';
 import groupRoutes from './groups';
 import { permissionMiddleware } from './middleware/permissionMiddleware';
+import userRoutes from './users';
 
 dotenv.config();
 const app = express();
@@ -20,7 +21,8 @@ ensureSuperAdminFromEnv().catch(err => console.error('failed create admin', err)
 
 // auth
 app.use('/auth', authRoutes);
-app.use('/groups', groupRoutes);
+app.use('/api/groups', groupRoutes);
+app.use('/api/users', userRoutes);
 
 app.get('/api/buckets', authMiddleware, permissionMiddleware('bucket', 'read'), async (req, res) => {
   try { const buckets = await listBuckets(); res.json(buckets); }

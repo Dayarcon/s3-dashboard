@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { getGroups, createGroup, assignPermission } from '../lib/api';
 import Router from 'next/router';
-import { getToken } from '../lib/auth';
+import { getToken, logout } from '../lib/auth';
+import Link from 'next/link';
 
 interface Group {
   id: number;
@@ -82,24 +83,133 @@ export default function GroupsPage() {
     }
   }
 
+  const handleLogout = () => {
+    logout();
+    Router.push('/login');
+  };
+
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f9fafb' }}>
       {/* Header */}
       <header style={{ backgroundColor: 'white', borderBottom: '1px solid #e5e7eb', position: 'sticky', top: 0, zIndex: 10 }}>
         <div style={{ padding: '16px 24px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ width: '36px', height: '36px', backgroundColor: '#4f46e5', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: 'white' }}>
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-              </svg>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ width: '36px', height: '36px', backgroundColor: '#4f46e5', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: 'white' }}>
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                  </svg>
+                </div>
+                <div>
+                  <h1 style={{ fontSize: '18px', fontWeight: 600, color: '#111827', margin: 0 }}>Groups Management</h1>
+                  <p style={{ fontSize: '12px', color: '#6b7280', margin: 0 }}>Manage groups and permissions</p>
+                </div>
+              </div>
+
+              {/* Navigation Menu */}
+              <nav style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Link href="/" style={{ textDecoration: 'none' }}>
+                  <button style={{
+                    padding: '8px 16px',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#6b7280',
+                    backgroundColor: 'transparent',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '6px',
+                    cursor: 'pointer'
+                  }}>Files</button>
+                </Link>
+                <Link href="/users" style={{ textDecoration: 'none' }}>
+                  <button style={{
+                    padding: '8px 16px',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#6b7280',
+                    backgroundColor: 'transparent',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '6px',
+                    cursor: 'pointer'
+                  }}>Users</button>
+                </Link>
+                <Link href="/groups" style={{ textDecoration: 'none' }}>
+                  <button style={{
+                    padding: '8px 16px',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#4f46e5',
+                    backgroundColor: '#eef2ff',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer'
+                  }}>Groups</button>
+                </Link>
+              </nav>
             </div>
-            <div>
-              <h1 style={{ fontSize: '18px', fontWeight: 600, color: '#111827', margin: 0 }}>Groups Management</h1>
-              <p style={{ fontSize: '12px', color: '#6b7280', margin: 0 }}>Manage groups and permissions</p>
+            
+            {/* User info and logout */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              {/* user object is not defined in this file, so this block is commented out */}
+              {/* {user && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{
+                    width: '32px',
+                    height: '32px',
+                    backgroundColor: '#e5e7eb',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#4f46e5'
+                  }}>
+                    {user.username?.charAt(0).toUpperCase() || 'U'}
+                  </div>
+                  <span style={{ fontSize: '14px', color: '#374151', fontWeight: 500 }}>
+                    {user.username || 'User'}
+                  </span>
+                </div>
+              )} */}
+              <button
+                onClick={handleLogout}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '8px 16px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  color: '#6b7280',
+                  backgroundColor: 'transparent',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#f3f4f6';
+                  e.currentTarget.style.borderColor = '#9ca3af';
+                  e.currentTarget.style.color = '#374151';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                  e.currentTarget.style.borderColor = '#d1d5db';
+                  e.currentTarget.style.color = '#6b7280';
+                }}
+              >
+                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+                Logout
+              </button>
             </div>
           </div>
         </div>
       </header>
+        
+    
 
       <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px' }}>
         {/* Error/Success Messages */}
