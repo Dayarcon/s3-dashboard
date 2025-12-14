@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getGroups, createGroup, assignPermission, getGroupDetails, removePermission, removeUserFromGroup, deleteGroup } from '../lib/api';
-import { axiosWithAuth, getUser } from '../lib/auth';
+import { axiosWithAuth, getUser, getToken, logout, checkTokenAndLogout } from '../lib/auth';
 import Router from 'next/router';
-import { getToken, logout } from '../lib/auth';
 import Link from 'next/link';
 
 interface Group {
@@ -32,6 +31,11 @@ export default function GroupsPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
 
   useEffect(() => {
+    // Check token expiration on component mount
+    if (checkTokenAndLogout()) {
+      return; // User was logged out, don't proceed
+    }
+    
     const t = getToken();
     if (!t) {
       Router.push('/login');

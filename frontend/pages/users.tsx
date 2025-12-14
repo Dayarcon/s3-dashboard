@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getGroups, assignUserToGroup, createUser, getUserDetails, deleteUser } from '../lib/api';
-import { axiosWithAuth, getUser } from '../lib/auth';
+import { axiosWithAuth, getUser, getToken, logout, checkTokenAndLogout } from '../lib/auth';
 import Router from 'next/router';
-import { getToken, logout } from '../lib/auth';
 import Link from 'next/link';
 
 interface User {
@@ -45,6 +44,11 @@ export default function UsersPage() {
   const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
 
   useEffect(() => {
+    // Check token expiration on component mount
+    if (checkTokenAndLogout()) {
+      return; // User was logged out, don't proceed
+    }
+    
     const t = getToken();
     if (!t) {
       Router.push('/login');

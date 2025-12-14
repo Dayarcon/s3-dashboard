@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { getAuditLogs, AuditLog } from '../lib/audit';
 import { axiosWithAuth, logout } from '../lib/auth';
 import Router from 'next/router';
-import { getToken } from '../lib/auth';
+import { getToken, checkTokenAndLogout } from '../lib/auth';
 import Link from 'next/link';
 
 export default function AuditPage() {
@@ -14,6 +14,11 @@ export default function AuditPage() {
   const limit = 50;
 
   useEffect(() => {
+    // Check token expiration on component mount
+    if (checkTokenAndLogout()) {
+      return; // User was logged out, don't proceed
+    }
+    
     if (!getToken()) Router.push('/login');
   }, []);
 
