@@ -3,7 +3,7 @@ import { listBuckets, listPrefix, getFile, putFile } from '../lib/s3api'
 import Router from 'next/router';
 import { getToken, getUser, logout } from '../lib/auth';
 import Link from 'next/link';
-import { deleteFile, deleteFiles, copyFile, moveFile, uploadFile, getFileMetadata } from '../lib/s3api';
+import { deleteFile, deleteFiles, copyFile, moveFile, uploadFile, getFileMetadata, createFolder, deleteFolder } from '../lib/s3api';
 export default function Explorer(){
   const [buckets, setBuckets] = useState<any[]>([])
   const [selectedBucket, setSelectedBucket] = useState('')
@@ -22,7 +22,9 @@ export default function Explorer(){
 const [showUploadModal, setShowUploadModal] = useState(false);
 const [showDeleteModal, setShowDeleteModal] = useState(false);
 const [showMoveModal, setShowMoveModal] = useState(false);
+const [showCreateFolderModal, setShowCreateFolderModal] = useState(false);
 const [newFileName, setNewFileName] = useState('');
+const [newFolderName, setNewFolderName] = useState('');
 
 
   useEffect(() => {
@@ -186,6 +188,40 @@ async function handleUploadFile(file: File) {
   }
 }
 
+// Create folder
+async function handleCreateFolder() {
+  if (!selectedBucket || !newFolderName.trim()) return;
+  const folderPath = prefix ? `${prefix}${newFolderName.trim()}` : newFolderName.trim();
+  try {
+    await createFolder(selectedBucket, folderPath);
+    setSaveMessage('Folder created successfully!');
+    setNewFolderName('');
+    setShowCreateFolderModal(false);
+    load(prefix);
+  } catch (err: any) {
+    if (err.response?.status === 403) {
+      setError('You do not have permission to create folders. Please contact an administrator.');
+    } else {
+      setError(err.response?.data?.error || 'Failed to create folder');
+    }
+  }
+}
+
+// Delete folder
+async function handleDeleteFolder(folderPath: string) {
+  if (!selectedBucket || !confirm(`Delete folder "${getFolderName(folderPath)}"? This will not delete files inside the folder.`)) return;
+  try {
+    await deleteFolder(selectedBucket, folderPath);
+    setSaveMessage('Folder deleted successfully!');
+    load(prefix);
+  } catch (err: any) {
+    if (err.response?.status === 403) {
+      setError('You do not have permission to delete folders. Please contact an administrator.');
+    } else {
+      setError(err.response?.data?.error || 'Failed to delete folder');
+    }
+  }
+}
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f9fafb' }}>
@@ -414,31 +450,73 @@ async function handleUploadFile(file: File) {
                     </div>
                     <div>
                       {folders.map(f=>(
-                        <button 
-                          key={f} 
-                          onClick={()=>enterFolder(f)}
+                        <div
+                          key={f}
                           style={{
                             width: '100%',
                             display: 'flex',
                             alignItems: 'center',
-                            gap: '8px',
-                            padding: '6px 8px',
-                            textAlign: 'left',
-                            fontSize: '14px',
-                            color: '#374151',
-                            border: 'none',
-                            background: 'transparent',
-                            cursor: 'pointer',
-                            borderRadius: '6px'
+                            gap: '4px',
+                            padding: '2px'
                           }}
-                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
-                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                          onMouseEnter={(e) => {
+                            const deleteBtn = e.currentTarget.querySelector('.folder-delete-btn') as HTMLElement;
+                            if (deleteBtn) deleteBtn.style.display = 'flex';
+                          }}
+                          onMouseLeave={(e) => {
+                            const deleteBtn = e.currentTarget.querySelector('.folder-delete-btn') as HTMLElement;
+                            if (deleteBtn) deleteBtn.style.display = 'none';
+                          }}
                         >
-                          <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: '#9ca3af', flexShrink: 0 }}>
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                          </svg>
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{getFolderName(f)}</span>
-                        </button>
+                          <button 
+                            onClick={()=>enterFolder(f)}
+                            style={{
+                              flex: 1,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              padding: '6px 8px',
+                              textAlign: 'left',
+                              fontSize: '14px',
+                              color: '#374151',
+                              border: 'none',
+                              background: 'transparent',
+                              cursor: 'pointer',
+                              borderRadius: '6px'
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
+                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                          >
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: '#9ca3af', flexShrink: 0 }}>
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                            </svg>
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{getFolderName(f)}</span>
+                          </button>
+                          <button
+                            className="folder-delete-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteFolder(f);
+                            }}
+                            style={{
+                              display: 'none',
+                              padding: '4px 6px',
+                              fontSize: '12px',
+                              color: '#dc2626',
+                              backgroundColor: 'transparent',
+                              border: '1px solid #dc2626',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              alignItems: 'center',
+                              justifyContent: 'center'
+                            }}
+                            title="Delete Folder"
+                          >
+                            <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -620,6 +698,33 @@ async function handleUploadFile(file: File) {
                 ))}
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={() => setShowCreateFolderModal(true)}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    color: '#10b981',
+                    backgroundColor: 'transparent',
+                    border: '1px solid #10b981',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#d1fae5'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent'
+                  }}
+                >
+                  <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                  </svg>
+                  New Folder
+                </button>
                 <button
                   onClick={() => setShowUploadModal(true)}
                   style={{
@@ -848,6 +953,146 @@ async function handleUploadFile(file: File) {
             <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '12px', margin: 0 }}>
               File will be uploaded to: {prefix || 'root'}
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Create Folder Modal */}
+      {showCreateFolderModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '20px'
+        }} onClick={() => {
+          setShowCreateFolderModal(false);
+          setNewFolderName('');
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            maxWidth: '500px',
+            width: '100%',
+            padding: '24px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+          }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+              <h2 style={{ fontSize: '20px', fontWeight: 600, color: '#111827', margin: 0 }}>Create New Folder</h2>
+              <button
+                onClick={() => {
+                  setShowCreateFolderModal(false);
+                  setNewFolderName('');
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '24px',
+                  color: '#6b7280',
+                  cursor: 'pointer',
+                  padding: '4px 8px'
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{
+                display: 'block',
+                fontSize: '14px',
+                fontWeight: 500,
+                color: '#374151',
+                marginBottom: '8px'
+              }}>
+                Folder Name
+              </label>
+              <input
+                type="text"
+                placeholder="Enter folder name"
+                value={newFolderName}
+                onChange={e => setNewFolderName(e.target.value)}
+                onKeyPress={e => {
+                  if (e.key === 'Enter' && newFolderName.trim()) {
+                    handleCreateFolder();
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  fontSize: '14px',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '6px',
+                  outline: 'none',
+                  boxSizing: 'border-box'
+                }}
+                onFocus={(e) => e.currentTarget.style.borderColor = '#4f46e5'}
+                onBlur={(e) => e.currentTarget.style.borderColor = '#d1d5db'}
+                autoFocus
+              />
+              <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '8px', margin: 0 }}>
+                Folder will be created in: {prefix || 'root'}
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => {
+                  setShowCreateFolderModal(false);
+                  setNewFolderName('');
+                }}
+                style={{
+                  padding: '10px 20px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  color: '#374151',
+                  backgroundColor: 'transparent',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  transition: 'background-color 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#f3f4f6';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateFolder}
+                disabled={!newFolderName.trim()}
+                style={{
+                  padding: '10px 20px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  color: 'white',
+                  backgroundColor: !newFolderName.trim() ? '#9ca3af' : '#10b981',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: !newFolderName.trim() ? 'not-allowed' : 'pointer',
+                  transition: 'background-color 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  if (newFolderName.trim()) {
+                    e.currentTarget.style.backgroundColor = '#059669';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (newFolderName.trim()) {
+                    e.currentTarget.style.backgroundColor = '#10b981';
+                  }
+                }}
+              >
+                Create Folder
+              </button>
+            </div>
           </div>
         </div>
       )}

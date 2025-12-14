@@ -92,3 +92,14 @@ export async function moveObject(bucket: string, sourceKey: string, destKey: str
   await copyObject(bucket, sourceKey, destKey);
   await deleteObject(bucket, sourceKey);
 }
+
+export async function createFolder(bucket: string, folderPath: string) {
+  // Ensure folder path ends with '/'
+  const folderKey = folderPath.endsWith('/') ? folderPath : `${folderPath}/`;
+  const cmd = new PutObjectCommand({ 
+    Bucket: bucket, 
+    Key: folderKey,
+    Body: ''
+  });
+  await client.send(cmd);
+}

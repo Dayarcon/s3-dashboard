@@ -7,7 +7,8 @@ import { listBuckets, listAtPrefix, getObjectContent, putObjectContent, deleteOb
   deleteObjects, 
   copyObject, 
   moveObject, 
-  getObjectMetadata  } from './s3';
+  getObjectMetadata,
+  createFolder  } from './s3';
 import authRoutes from './auth';
 import { ensureSuperAdminFromEnv } from './db';
 import { authMiddleware } from './middleware/authMiddleware';
@@ -184,6 +185,46 @@ app.post('/api/file/upload',
     } catch (err: any) {
       console.error(err);
       res.status(500).json({ error: 'upload_failed', detail: err.message });
+    }
+  }
+);
+
+// Create folder endpoint
+app.post('/api/folder/create', 
+  authMiddleware, 
+  permissionMiddleware('folder', 'write'),
+  async (req, res) => {
+    try {
+      const { bucket, folderPath } = req.body;
+      if (!bucket || !folderPath) {
+        return res.status(400).json({ error: 'missing_params' });
+      }
+      await createFolder(bucket, folderPath);
+      res.json({ ok: true, folderPath });
+    } catch (err: any) {
+      console.error(err);
+      res.status(500).json({ error: 'create_folder_failed', detail: err.message });
+    }
+  }
+);
+
+// Delete folder endpoint
+app.delete('/api/folder', 
+  authMiddleware, 
+  permissionMiddleware('folder', 'write'),
+  async (req, res) => {
+    try {
+      const { bucket, folderPath } = req.body;
+      if (!bucket || !folderPath) {
+        return res.status(400).json({ error: 'missing_params' });
+      }
+      // Ensure folder path ends with '/' for deletion
+      const folderKey = folderPath.endsWith('/') ? folderPath : `${folderPath}/`;
+      await deleteObject(bucket, folderKey);
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error(err);
+      res.status(500).json({ error: 'delete_folder_failed', detail: err.message });
     }
   }
 );

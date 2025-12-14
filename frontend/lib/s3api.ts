@@ -65,3 +65,15 @@ export async function uploadFile(bucket: string, key: string, file: File) {
     headers: { 'Content-Type': 'multipart/form-data' }
   });
 }
+
+// NEW: Create folder
+export async function createFolder(bucket: string, folderPath: string) {
+  const api = axiosWithAuth();
+  return api.post('/api/folder/create', { bucket, folderPath });
+}
+
+// NEW: Delete folder
+export async function deleteFolder(bucket: string, folderPath: string) {
+  const api = axiosWithAuth();
+  return api.delete('/api/folder', { data: { bucket, folderPath } });
+}
