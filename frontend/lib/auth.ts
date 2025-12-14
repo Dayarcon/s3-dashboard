@@ -22,7 +22,9 @@ export function axiosWithAuth() {
   const instance = axios.create({ baseURL: base });
   instance.interceptors.request.use(cfg => {
     const tk = getToken();
-    if (tk) cfg.headers = { ...cfg.headers, Authorization: `Bearer ${tk}` };
+    if (tk) {
+      cfg.headers.Authorization = `Bearer ${tk}`;
+    }
     return cfg;
   });
    // Response interceptor - handle 401 errors

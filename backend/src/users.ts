@@ -26,7 +26,15 @@ router.get('/', authMiddleware, (req: AuthRequest, res) => {
         LEFT JOIN user_groups ug ON ug.user_id = u.id
         LEFT JOIN groups g ON g.id = ug.group_id
         ORDER BY u.created_at DESC
-      `).all();
+      `).all() as Array<{
+        id: number;
+        username: string;
+        role: string;
+        is_active: number;
+        created_at: string;
+        group_id: number | null;
+        group_name: string | null;
+      }>;
   
       // Group rows per user
       const usersMap: Record<number, any> = {};

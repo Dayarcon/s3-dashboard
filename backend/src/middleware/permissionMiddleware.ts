@@ -18,7 +18,7 @@ export function permissionMiddleware(resource: string, access: 'read' | 'write')
             JOIN user_groups ug ON ug.group_id = p.group_id
             WHERE ug.user_id = ?
         `);
-        const rows = stmt.all(req.user.sub);
+        const rows = stmt.all(req.user.sub) as Array<{ access: string }>;
 
         let allowed = rows.some(r => r.access === access || r.access === 'read-write');
 
