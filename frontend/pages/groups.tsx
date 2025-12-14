@@ -224,6 +224,18 @@ export default function GroupsPage() {
                     cursor: 'pointer'
                   }}>Groups</button>
                 </Link>
+                <Link href="/audit" style={{ textDecoration: 'none' }}>
+                  <button style={{
+                    padding: '8px 16px',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#6b7280',
+                    backgroundColor: 'transparent',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '6px',
+                    cursor: 'pointer'
+                  }}>Audit</button>
+                </Link>
               </nav>
             </div>
             

@@ -183,5 +183,72 @@ router.delete('/:userId', authMiddleware, (req: AuthRequest, res) => {
     });
   }
 });
+
+router.put('/:userId', authMiddleware, async (req: AuthRequest, res) => {
+  if (req.user?.role !== 'admin' && req.user?.sub !== Number(req.params.userId)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+
+  const userId = Number(req.params.userId);
+  const { username, role, is_active } = req.body;
+
+  try {
+    const user = db.prepare('SELECT id FROM users WHERE id = ?').get(userId);
+    if (!user) return res.status(404).json({ error: 'user_not_found' });
+
+    const updates: string[] = [];
+    const values: any[] = [];
+
+    if (username !== undefined) {
+      const existing = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(username, userId);
+      if (existing) return res.status(409).json({ error: 'username_taken' });
+      updates.push('username = ?');
+      values.push(username);
+    }
+
+    if (role !== undefined && req.user?.role === 'admin') {
+      updates.push('role = ?');
+      values.push(role);
+    }
+
+    if (is_active !== undefined && req.user?.role === 'admin') {
+      updates.push('is_active = ?');
+      values.push(is_active ? 1 : 0);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'no_updates_provided' });
+    }
+
+    values.push(userId);
+    const sql = `UPDATE users SET ${updates.join(', ')} WHERE id = ?`;
+    db.prepare(sql).run(...values);
+
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'update_failed', detail: err.message });
+  }
+});
+
+// Activate/Deactivate user
+router.patch('/:userId/status', authMiddleware, (req: AuthRequest, res) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ error: 'admin_only' });
+  }
+
+  const userId = Number(req.params.userId);
+  const { is_active } = req.body;
+
+  if (typeof is_active !== 'boolean') {
+    return res.status(400).json({ error: 'is_active_must_be_boolean' });
+  }
+
+  try {
+    db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(is_active ? 1 : 0, userId);
+    res.json({ ok: true, is_active });
+  } catch (err: any) {
+    res.status(500).json({ error: 'status_update_failed', detail: err.message });
+  }
+});
   
 export default router;

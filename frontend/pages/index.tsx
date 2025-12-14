@@ -3,7 +3,7 @@ import { listBuckets, listPrefix, getFile, putFile } from '../lib/s3api'
 import Router from 'next/router';
 import { getToken, getUser, logout } from '../lib/auth';
 import Link from 'next/link';
-
+import { deleteFile, deleteFiles, copyFile, moveFile, uploadFile, getFileMetadata } from '../lib/s3api';
 export default function Explorer(){
   const [buckets, setBuckets] = useState<any[]>([])
   const [selectedBucket, setSelectedBucket] = useState('')
@@ -18,6 +18,12 @@ export default function Explorer(){
   const [error, setError] = useState<string | null>(null)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [user, setUser] = useState<any>(null)
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+const [showUploadModal, setShowUploadModal] = useState(false);
+const [showDeleteModal, setShowDeleteModal] = useState(false);
+const [showMoveModal, setShowMoveModal] = useState(false);
+const [newFileName, setNewFileName] = useState('');
+
 
   useEffect(() => {
     const t = getToken();
@@ -113,6 +119,63 @@ export default function Explorer(){
     return parts[parts.length - 1] || folderKey
   }
 
+  // Delete single file
+async function handleDeleteFile(key: string) {
+  if (!selectedBucket || !confirm(`Delete ${key}?`)) return;
+  try {
+    await deleteFile(selectedBucket, key);
+    setSaveMessage('File deleted successfully!');
+    load(prefix); // Reload list
+    if (selectedFile?.key === key) setSelectedFile(null);
+  } catch (err: any) {
+    setError(err.response?.data?.error || 'Failed to delete file');
+  }
+}
+
+// Bulk delete
+async function handleBulkDelete() {
+  if (!selectedBucket || selectedFiles.size === 0) return;
+  if (!confirm(`Delete ${selectedFiles.size} file(s)?`)) return;
+  try {
+    await deleteFiles(selectedBucket, Array.from(selectedFiles));
+    setSaveMessage(`${selectedFiles.size} file(s) deleted successfully!`);
+    setSelectedFiles(new Set());
+    load(prefix);
+    setSelectedFile(null);
+  } catch (err: any) {
+    setError(err.response?.data?.error || 'Failed to delete files');
+  }
+}
+
+// Rename/Move file
+async function handleRenameFile(oldKey: string, newKey: string) {
+  if (!selectedBucket) return;
+  try {
+    await moveFile(selectedBucket, oldKey, newKey);
+    setSaveMessage('File renamed successfully!');
+    load(prefix);
+    if (selectedFile?.key === oldKey) {
+      setSelectedFile({ ...selectedFile, key: newKey });
+    }
+  } catch (err: any) {
+    setError(err.response?.data?.error || 'Failed to rename file');
+  }
+}
+
+// Upload file
+async function handleUploadFile(file: File) {
+  if (!selectedBucket) return;
+  const key = prefix ? `${prefix}${file.name}` : file.name;
+  try {
+    await uploadFile(selectedBucket, key, file);
+    setSaveMessage('File uploaded successfully!');
+    load(prefix);
+  } catch (err: any) {
+    setError(err.response?.data?.error || 'Failed to upload file');
+  }
+}
+
+
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f9fafb' }}>
       {/* Header */}
@@ -202,6 +265,30 @@ export default function Explorer(){
                   }}
                   >
                     Groups
+                  </button>
+                </Link>
+                <Link href="/audit" style={{ textDecoration: 'none' }}>
+                  <button style={{
+                    padding: '8px 16px',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#6b7280',
+                    backgroundColor: 'transparent',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#f3f4f6';
+                    e.currentTarget.style.borderColor = '#d1d5db';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                    e.currentTarget.style.borderColor = '#e5e7eb';
+                  }}
+                  >
+                    Audit
                   </button>
                 </Link>
               </nav>
@@ -349,44 +436,118 @@ export default function Explorer(){
                     </div>
                     <div>
                       {files.map(file=>(
-                        <button 
-                          key={file.key} 
-                          onClick={()=>openFile(file)}
+                        <div
+                          key={file.key}
                           style={{
                             width: '100%',
                             display: 'flex',
                             alignItems: 'center',
-                            gap: '8px',
-                            padding: '6px 8px',
-                            textAlign: 'left',
-                            fontSize: '14px',
-                            borderRadius: '6px',
-                            border: 'none',
-                            cursor: 'pointer',
-                            backgroundColor: selectedFile?.key === file.key ? '#eef2ff' : 'transparent',
-                            color: selectedFile?.key === file.key ? '#4338ca' : '#374151'
+                            gap: '4px',
+                            padding: '2px'
                           }}
                           onMouseEnter={(e) => {
-                            if (selectedFile?.key !== file.key) {
-                              e.currentTarget.style.backgroundColor = '#f3f4f6'
-                            }
+                            const deleteBtn = e.currentTarget.querySelector('.file-delete-btn') as HTMLElement;
+                            const renameBtn = e.currentTarget.querySelector('.file-rename-btn') as HTMLElement;
+                            if (deleteBtn) deleteBtn.style.display = 'flex';
+                            if (renameBtn) renameBtn.style.display = 'flex';
                           }}
                           onMouseLeave={(e) => {
-                            if (selectedFile?.key !== file.key) {
-                              e.currentTarget.style.backgroundColor = 'transparent'
-                            }
+                            const deleteBtn = e.currentTarget.querySelector('.file-delete-btn') as HTMLElement;
+                            const renameBtn = e.currentTarget.querySelector('.file-rename-btn') as HTMLElement;
+                            if (deleteBtn) deleteBtn.style.display = 'none';
+                            if (renameBtn) renameBtn.style.display = 'none';
                           }}
                         >
-                          <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ flexShrink: 0, color: selectedFile?.key === file.key ? '#6366f1' : '#9ca3af' }}>
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{getFileName(file.key)}</span>
-                          {file.size && (
-                            <span style={{ fontSize: '12px', color: '#9ca3af', marginLeft: 'auto' }}>
-                              {Math.round(file.size / 1024)}KB
-                            </span>
-                          )}
-                        </button>
+                          <button 
+                            onClick={()=>openFile(file)}
+                            style={{
+                              flex: 1,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              padding: '6px 8px',
+                              textAlign: 'left',
+                              fontSize: '14px',
+                              borderRadius: '6px',
+                              border: 'none',
+                              cursor: 'pointer',
+                              backgroundColor: selectedFile?.key === file.key ? '#eef2ff' : 'transparent',
+                              color: selectedFile?.key === file.key ? '#4338ca' : '#374151'
+                            }}
+                            onMouseEnter={(e) => {
+                              if (selectedFile?.key !== file.key) {
+                                e.currentTarget.style.backgroundColor = '#f3f4f6'
+                              }
+                            }}
+                            onMouseLeave={(e) => {
+                              if (selectedFile?.key !== file.key) {
+                                e.currentTarget.style.backgroundColor = 'transparent'
+                              }
+                            }}
+                          >
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ flexShrink: 0, color: selectedFile?.key === file.key ? '#6366f1' : '#9ca3af' }}>
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{getFileName(file.key)}</span>
+                            {file.size && (
+                              <span style={{ fontSize: '12px', color: '#9ca3af', marginLeft: 'auto' }}>
+                                {Math.round(file.size / 1024)}KB
+                              </span>
+                            )}
+                          </button>
+                          <button
+                            className="file-rename-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const newName = prompt('Enter new file name:', getFileName(file.key));
+                              if (newName && newName !== getFileName(file.key)) {
+                                const newKey = prefix ? `${prefix}${newName}` : newName;
+                                handleRenameFile(file.key, newKey);
+                              }
+                            }}
+                            style={{
+                              display: 'none',
+                              padding: '4px 6px',
+                              fontSize: '12px',
+                              color: '#4f46e5',
+                              backgroundColor: 'transparent',
+                              border: '1px solid #4f46e5',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              alignItems: 'center',
+                              justifyContent: 'center'
+                            }}
+                            title="Rename"
+                          >
+                            <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+                          <button
+                            className="file-delete-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteFile(file.key);
+                            }}
+                            style={{
+                              display: 'none',
+                              padding: '4px 6px',
+                              fontSize: '12px',
+                              color: '#dc2626',
+                              backgroundColor: 'transparent',
+                              border: '1px solid #dc2626',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              alignItems: 'center',
+                              justifyContent: 'center'
+                            }}
+                            title="Delete"
+                          >
+                            <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -409,7 +570,7 @@ export default function Explorer(){
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: 'white' }}>
           {/* Breadcrumb */}
           {selectedBucket && (
-            <div style={{ padding: '12px 24px', borderBottom: '1px solid #e5e7eb', backgroundColor: '#f9fafb' }}>
+            <div style={{ padding: '12px 24px', borderBottom: '1px solid #e5e7eb', backgroundColor: '#f9fafb', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px' }}>
                 {history.map((h,i)=>(
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -442,6 +603,64 @@ export default function Explorer(){
                     )}
                   </div>
                 ))}
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={() => setShowUploadModal(true)}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    color: '#4f46e5',
+                    backgroundColor: 'transparent',
+                    border: '1px solid #4f46e5',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#eef2ff'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent'
+                  }}
+                >
+                  <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Upload
+                </button>
+                {selectedFiles.size > 0 && (
+                  <button
+                    onClick={handleBulkDelete}
+                    style={{
+                      padding: '6px 12px',
+                      fontSize: '13px',
+                      fontWeight: 500,
+                      color: '#dc2626',
+                      backgroundColor: 'transparent',
+                      border: '1px solid #dc2626',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#fee2e2'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent'
+                    }}
+                  >
+                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    Delete ({selectedFiles.size})
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -553,6 +772,70 @@ export default function Explorer(){
           </div>
         </div>
       </div>
+
+      {/* Upload Modal */}
+      {showUploadModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '20px'
+        }} onClick={() => setShowUploadModal(false)}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            maxWidth: '500px',
+            width: '100%',
+            padding: '24px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+          }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+              <h2 style={{ fontSize: '20px', fontWeight: 600, color: '#111827', margin: 0 }}>Upload File</h2>
+              <button
+                onClick={() => setShowUploadModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '24px',
+                  color: '#6b7280',
+                  cursor: 'pointer',
+                  padding: '4px 8px'
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <input
+              type="file"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file && selectedBucket) {
+                  handleUploadFile(file);
+                  setShowUploadModal(false);
+                }
+              }}
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: '2px dashed #d1d5db',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '14px'
+              }}
+            />
+            <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '12px', margin: 0 }}>
+              File will be uploaded to: {prefix || 'root'}
+            </p>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes spin {

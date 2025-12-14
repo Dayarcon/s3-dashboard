@@ -1,4 +1,4 @@
-import { axiosWithAuth } from './auth';
+import { axiosWithAuth, logout } from './auth';
 
 export async function getGroups() {
   const api = axiosWithAuth();
@@ -62,4 +62,47 @@ export async function deleteUser(userId: number) {
   const api = axiosWithAuth();
   await api.delete(`/api/users/${userId}`);
 }
+
+// NEW: Update user
+export async function updateUser(userId: number, data: { username?: string; role?: string; is_active?: boolean }) {
+    const api = axiosWithAuth();
+    const res = await api.put(`/api/users/${userId}`, data);
+    return res.data;
+  }
+  
+  // NEW: Activate/Deactivate user
+  export async function updateUserStatus(userId: number, is_active: boolean) {
+    const api = axiosWithAuth();
+    const res = await api.patch(`/api/users/${userId}/status`, { is_active });
+    return res.data;
+  }
+
+  // NEW: Logout (call API)
+export async function logoutAPI() {
+    const api = axiosWithAuth();
+    try {
+      await api.post('/auth/logout');
+    } catch (err) {
+      console.error('Logout API error:', err);
+    } finally {
+      logout(); // Clear local storage
+    }
+  }
+  
+  // NEW: Change password
+  export async function changePassword(currentPassword: string, newPassword: string) {
+    const api = axiosWithAuth();
+    const res = await api.post('/auth/change-password', { currentPassword, newPassword });
+    return res.data;
+  }
+  
+  // NEW: Refresh token
+  export async function refreshToken() {
+    const api = axiosWithAuth();
+    const res = await api.post('/auth/refresh');
+    if (res.data.token) {
+      localStorage.setItem('s3dash_token', res.data.token);
+    }
+    return res.data;
+  }
   

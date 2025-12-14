@@ -2,7 +2,8 @@
 import express from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import { findUserByUsername, createUser, insertAudit } from './db';
+import { findUserByUsername, createUser, insertAudit, db } from './db';
+import { authMiddleware, AuthRequest } from './middleware/authMiddleware';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me';
@@ -40,4 +41,51 @@ router.post('/signup', async (req, res) => {
   res.json({ id, username, role: role || 'developer' });
 });
 
+// logout
+router.post('/logout', authMiddleware, async (req: AuthRequest, res) => {
+    if (req.user) {
+      insertAudit(req.user.sub, 'logout', 'auth', { ip: req.ip });
+    }
+    res.json({ ok: true });
+  });
+  
+  // Change password
+  router.post('/change-password', authMiddleware, async (req: AuthRequest, res) => {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'current_password_and_new_password_required' });
+    }
+  
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: 'password_too_short' });
+    }
+  
+    const user = findUserByUsername(req.user!.username);
+    if (!user) return res.status(404).json({ error: 'user_not_found' });
+  
+    const valid = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!valid) return res.status(401).json({ error: 'invalid_current_password' });
+  
+    const hash = await bcrypt.hash(newPassword, 10);
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, user.id);
+    
+    insertAudit(user.id, 'password_change', 'auth', { ip: req.ip });
+    res.json({ ok: true });
+  });
+  
+  // Refresh token (optional - extend token expiry)
+  router.post('/refresh', authMiddleware, async (req: AuthRequest, res) => {
+    if (!req.user) return res.status(401).json({ error: 'unauthorized' });
+    
+    const user = findUserByUsername(req.user.username);
+    if (!user || !user.is_active) return res.status(401).json({ error: 'user_inactive' });
+  
+    const token = jwt.sign(
+      { sub: user.id, username: user.username, role: user.role },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
+  
+    res.json({ token });
+  });
 export default router;
