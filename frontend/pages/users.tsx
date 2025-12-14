@@ -29,7 +29,7 @@ export default function UsersPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  
+
   // User creation form state
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -38,7 +38,11 @@ export default function UsersPage() {
 
   const [selectedUser, setSelectedUser] = useState<UserDetail | null>(null);
   const [showDetails, setShowDetails] = useState(false);
-  const [currentUser ,setCurrentUser] = useState<any>(null);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [showAssignGroupModal, setShowAssignGroupModal] = useState(false);
+  const [assignGroupUserId, setAssignGroupUserId] = useState<number | null>(null);
+  const [assignGroupUsername, setAssignGroupUsername] = useState('');
+  const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
 
   useEffect(() => {
     const t = getToken();
@@ -105,23 +109,25 @@ export default function UsersPage() {
     }
   }
 
-  async function handleAssignGroup(userId: number, username: string) {
-    const groupName = prompt(`Enter group name to assign to ${username}:\n\nAvailable groups: ${groups.map(g => g.name).join(', ') || 'none'}`);
-    if (!groupName) return;
+  function handleOpenAssignGroupModal(userId: number, username: string) {
+    setAssignGroupUserId(userId);
+    setAssignGroupUsername(username);
+    setSelectedGroupId(null);
+    setShowAssignGroupModal(true);
+  }
 
-    const group = groups.find(g => g.name.toLowerCase() === groupName.toLowerCase());
-    if (!group) {
-      alert('Group not found. Please check the group name and try again.');
-      return;
-    }
+  async function handleAssignGroup() {
+    if (!assignGroupUserId || !selectedGroupId) return;
 
     setLoading(true);
     setError(null);
     setSuccess(null);
     try {
-      await assignUserToGroup(userId, group.id);
-      setSuccess(`User ${username} assigned to group ${group.name} successfully!`);
+      await assignUserToGroup(assignGroupUserId, selectedGroupId);
+      const groupName = groups.find(g => g.id === selectedGroupId)?.name || '';
+      setSuccess(`User ${assignGroupUsername} assigned to group ${groupName} successfully!`);
       setTimeout(() => setSuccess(null), 3000);
+      setShowAssignGroupModal(false);
       fetchUsers(); // Refresh users list
     } catch (err: any) {
       console.error('Failed to assign group:', err);
@@ -135,26 +141,26 @@ export default function UsersPage() {
     setLoading(true);
     setError(null);
     setSuccess(null);
-    
+
     // Find the user from the existing list first
     const user = users.find(u => u.id === userId);
-    
+
     try {
       const details = await getUserDetails(userId);
       console.log('User details received:', details);
-      
+
       const userDetail: UserDetail = {
         id: details.id || userId,
         username: details.username || user?.username || '',
         role: details.role || user?.role || 'user',
         groups: details.groups || []
       };
-      
+
       setSelectedUser(userDetail);
       setShowDetails(true);
     } catch (err: any) {
       console.error('Failed to fetch user details:', err);
-      
+
       // Fallback: Show basic user info if detailed endpoint fails
       if (user) {
         console.log('Using fallback user info');
@@ -166,7 +172,7 @@ export default function UsersPage() {
         };
         setSelectedUser(userDetail);
         setShowDetails(true);
-        
+
         // Show a warning that group info is not available
         setError('Note: Group information is not available. The user details endpoint may not be fully implemented.');
         setTimeout(() => setError(null), 5000);
@@ -232,47 +238,47 @@ export default function UsersPage() {
                 </Link>
                 {currentUser?.role === 'admin' && (
                   <>
-                <Link href="/users" style={{ textDecoration: 'none' }}>
-                  <button style={{
-                    padding: '8px 16px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    color: '#4f46e5',
-                    backgroundColor: '#eef2ff',
-                    border: 'none',
-                    borderRadius: '6px',
-                    cursor: 'pointer'
-                  }}>Users</button>
-                </Link>
-                <Link href="/groups" style={{ textDecoration: 'none' }}>
-                  <button style={{
-                    padding: '8px 16px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    color: '#6b7280',
-                    backgroundColor: 'transparent',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '6px',
-                    cursor: 'pointer'
-                  }}>Groups</button>
-                </Link>
-                <Link href="/audit" style={{ textDecoration: 'none' }}>
-                  <button style={{
-                    padding: '8px 16px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    color: '#6b7280',
-                    backgroundColor: 'transparent',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '6px',
-                    cursor: 'pointer'
-                  }}>Audit</button>
-                </Link>
-                </>
+                    <Link href="/users" style={{ textDecoration: 'none' }}>
+                      <button style={{
+                        padding: '8px 16px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        color: '#4f46e5',
+                        backgroundColor: '#eef2ff',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer'
+                      }}>Users</button>
+                    </Link>
+                    <Link href="/groups" style={{ textDecoration: 'none' }}>
+                      <button style={{
+                        padding: '8px 16px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        color: '#6b7280',
+                        backgroundColor: 'transparent',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '6px',
+                        cursor: 'pointer'
+                      }}>Groups</button>
+                    </Link>
+                    <Link href="/audit" style={{ textDecoration: 'none' }}>
+                      <button style={{
+                        padding: '8px 16px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        color: '#6b7280',
+                        backgroundColor: 'transparent',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '6px',
+                        cursor: 'pointer'
+                      }}>Audit</button>
+                    </Link>
+                  </>
                 )}
               </nav>
             </div>
-            
+
             {/* User info and logout */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
               {/* user object is not defined in this file, so this block is commented out */}
@@ -692,6 +698,138 @@ export default function UsersPage() {
           </div>
         )}
 
+        {/* Assign Group Modal */}
+        {showAssignGroupModal && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1001,
+            padding: '20px'
+          }} onClick={() => setShowAssignGroupModal(false)}>
+            <div style={{
+              backgroundColor: 'white',
+              borderRadius: '12px',
+              maxWidth: '500px',
+              width: '100%',
+              padding: '24px',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+            }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+                <h2 style={{ fontSize: '20px', fontWeight: 600, color: '#111827', margin: 0 }}>
+                  Assign Group to {assignGroupUsername}
+                </h2>
+                <button
+                  onClick={() => setShowAssignGroupModal(false)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: '24px',
+                    color: '#6b7280',
+                    cursor: 'pointer',
+                    padding: '4px 8px'
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Select Group *
+                  </label>
+                  <select
+                    value={selectedGroupId || ''}
+                    onChange={e => setSelectedGroupId(Number(e.target.value))}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      fontSize: '14px',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '6px',
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                      backgroundColor: 'white'
+                    }}
+                    onFocus={(e) => e.currentTarget.style.borderColor = '#4f46e5'}
+                    onBlur={(e) => e.currentTarget.style.borderColor = '#d1d5db'}
+                  >
+                    <option value="">-- Select a group --</option>
+                    {groups.map(group => (
+                      <option key={group.id} value={group.id}>{group.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '8px' }}>
+                  <button
+                    onClick={() => setShowAssignGroupModal(false)}
+                    style={{
+                      padding: '10px 20px',
+                      fontSize: '14px',
+                      fontWeight: 500,
+                      color: '#374151',
+                      backgroundColor: 'transparent',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      transition: 'background-color 0.2s'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#f3f4f6';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleAssignGroup}
+                    disabled={loading || !selectedGroupId}
+                    style={{
+                      padding: '10px 20px',
+                      fontSize: '14px',
+                      fontWeight: 500,
+                      color: 'white',
+                      backgroundColor: loading || !selectedGroupId ? '#9ca3af' : '#4f46e5',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: loading || !selectedGroupId ? 'not-allowed' : 'pointer',
+                      transition: 'background-color 0.2s'
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!loading && selectedGroupId) {
+                        e.currentTarget.style.backgroundColor = '#4338ca';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!loading && selectedGroupId) {
+                        e.currentTarget.style.backgroundColor = '#4f46e5';
+                      }
+                    }}
+                  >
+                    {loading ? 'Assigning...' : 'Assign Group'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Users Table */}
         <div style={{
           backgroundColor: 'white',
@@ -780,7 +918,7 @@ export default function UsersPage() {
                           View Details
                         </button>
                         <button
-                          onClick={() => handleAssignGroup(u.id, u.username)}
+                          onClick={() => handleOpenAssignGroupModal(u.id, u.username)}
                           disabled={loading || groups.length === 0}
                           style={{
                             padding: '6px 12px',
@@ -813,11 +951,11 @@ export default function UsersPage() {
                       <button
                         onClick={async () => {
                           if (!confirm(`Are you sure you want to delete user "${u.username}"? This action cannot be undone.`)) return;
-                          
+
                           setLoading(true);
                           setError(null);
                           setSuccess(null);
-                          
+
                           try {
                             await deleteUser(u.id);
                             setSuccess(`User "${u.username}" deleted successfully!`);

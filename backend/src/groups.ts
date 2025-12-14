@@ -181,4 +181,33 @@ router.delete(
   }
 );
 
+/* ---------------------------------------------------
+   Delete Group
+--------------------------------------------------- */
+router.delete('/:id', authMiddleware, (req: AuthRequest, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  const groupId = Number(req.params.id);
+
+  // Check if group exists
+  const group = db.prepare(`SELECT id FROM groups WHERE id=?`).get(groupId);
+  if (!group) {
+    return res.status(404).json({ error: 'group_not_found' });
+  }
+
+  // Delete in transaction to ensure consistency
+  const tx = db.transaction(() => {
+    // Delete permissions
+    db.prepare(`DELETE FROM permissions WHERE group_id=?`).run(groupId);
+    // Delete user group associations
+    db.prepare(`DELETE FROM user_groups WHERE group_id=?`).run(groupId);
+    // Delete the group
+    db.prepare(`DELETE FROM groups WHERE id=?`).run(groupId);
+  });
+
+  tx();
+
+  res.json({ ok: true });
+});
+
 export default router;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { getGroups, createGroup, assignPermission, getGroupDetails, removePermission, removeUserFromGroup } from '../lib/api';
-import { axiosWithAuth } from '../lib/auth';
+import { getGroups, createGroup, assignPermission, getGroupDetails, removePermission, removeUserFromGroup, deleteGroup } from '../lib/api';
+import { axiosWithAuth, getUser } from '../lib/auth';
 import Router from 'next/router';
 import { getToken, logout } from '../lib/auth';
 import Link from 'next/link';
@@ -25,6 +25,21 @@ export default function GroupsPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<GroupDetail | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [showPermissionModal, setShowPermissionModal] = useState(false);
+  const [permissionGroupId, setPermissionGroupId] = useState<number | null>(null);
+  const [permissionResource, setPermissionResource] = useState('');
+  const [permissionAccess, setPermissionAccess] = useState<'read' | 'write' | 'read-write'>('read');
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
+  useEffect(() => {
+    const t = getToken();
+    if (!t) {
+      Router.push('/login');
+      return;
+    }
+    setCurrentUser(getUser());
+    fetchGroups();
+  }, []);
 
   useEffect(() => {
     const t = getToken();
@@ -68,26 +83,27 @@ export default function GroupsPage() {
     }
   }
 
-  async function handleAssignPermission(groupId: number) {
-    const resource = prompt('Resource (e.g., env/bucket or bucket name):');
-    if (!resource) return;
-    
-    const access = prompt('Access type (read/write/read-write):') as 'read' | 'write' | 'read-write';
-    if (!access || !['read', 'write', 'read-write'].includes(access)) {
-      alert('Invalid access type. Please use: read, write, or read-write');
-      return;
-    }
+  function handleOpenPermissionModal(groupId: number) {
+    setPermissionGroupId(groupId);
+    setPermissionResource('');
+    setPermissionAccess('read');
+    setShowPermissionModal(true);
+  }
+
+  async function handleAssignPermission() {
+    if (!permissionGroupId || !permissionResource.trim()) return;
 
     setLoading(true);
     setError(null);
     setSuccess(null);
     try {
-      await assignPermission(groupId, resource, access);
+      await assignPermission(permissionGroupId, permissionResource.trim(), permissionAccess);
       setSuccess('Permission assigned successfully!');
       setTimeout(() => setSuccess(null), 3000);
+      setShowPermissionModal(false);
       // Refresh group details
-      if (selectedGroup) {
-        handleViewDetails(groupId);
+      if (selectedGroup && selectedGroup.id === permissionGroupId) {
+        handleViewDetails(permissionGroupId);
       } else {
         fetchGroups();
       }
@@ -116,7 +132,7 @@ export default function GroupsPage() {
 
   async function handleRemovePermission(groupId: number, permissionId: number) {
     if (!confirm('Are you sure you want to remove this permission?')) return;
-    
+
     setLoading(true);
     setError(null);
     setSuccess(null);
@@ -140,7 +156,7 @@ export default function GroupsPage() {
 
   async function handleRemoveUser(groupId: number, userId: number) {
     if (!confirm('Are you sure you want to remove this user from the group?')) return;
-    
+
     setLoading(true);
     setError(null);
     setSuccess(null);
@@ -157,6 +173,29 @@ export default function GroupsPage() {
     } catch (err: any) {
       console.error('Failed to remove user:', err);
       setError(err?.response?.data?.error || 'Failed to remove user from group');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDeleteGroup(groupId: number, groupName: string) {
+    if (!confirm(`Are you sure you want to delete group "${groupName}"? This will remove all permissions and user assignments. This action cannot be undone.`)) return;
+
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      await deleteGroup(groupId);
+      setSuccess(`Group "${groupName}" deleted successfully!`);
+      setTimeout(() => setSuccess(null), 3000);
+      if (selectedGroup?.id === groupId) {
+        setShowDetails(false);
+        setSelectedGroup(null);
+      }
+      fetchGroups();
+    } catch (err: any) {
+      console.error('Failed to delete group:', err);
+      setError(err?.response?.data?.error || 'Failed to delete group');
     } finally {
       setLoading(false);
     }
@@ -200,45 +239,49 @@ export default function GroupsPage() {
                     cursor: 'pointer'
                   }}>Files</button>
                 </Link>
-                <Link href="/users" style={{ textDecoration: 'none' }}>
-                  <button style={{
-                    padding: '8px 16px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    color: '#6b7280',
-                    backgroundColor: 'transparent',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '6px',
-                    cursor: 'pointer'
-                  }}>Users</button>
-                </Link>
-                <Link href="/groups" style={{ textDecoration: 'none' }}>
-                  <button style={{
-                    padding: '8px 16px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    color: '#4f46e5',
-                    backgroundColor: '#eef2ff',
-                    border: 'none',
-                    borderRadius: '6px',
-                    cursor: 'pointer'
-                  }}>Groups</button>
-                </Link>
-                <Link href="/audit" style={{ textDecoration: 'none' }}>
-                  <button style={{
-                    padding: '8px 16px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    color: '#6b7280',
-                    backgroundColor: 'transparent',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '6px',
-                    cursor: 'pointer'
-                  }}>Audit</button>
-                </Link>
+                {currentUser?.role === 'admin' && (
+                  <>
+                    <Link href="/users" style={{ textDecoration: 'none' }}>
+                      <button style={{
+                        padding: '8px 16px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        color: '#6b7280',
+                        backgroundColor: 'transparent',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '6px',
+                        cursor: 'pointer'
+                      }}>Users</button>
+                    </Link>
+                    <Link href="/groups" style={{ textDecoration: 'none' }}>
+                      <button style={{
+                        padding: '8px 16px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        color: '#4f46e5',
+                        backgroundColor: '#eef2ff',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer'
+                      }}>Groups</button>
+                    </Link>
+                    <Link href="/audit" style={{ textDecoration: 'none' }}>
+                      <button style={{
+                        padding: '8px 16px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        color: '#6b7280',
+                        backgroundColor: 'transparent',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '6px',
+                        cursor: 'pointer'
+                      }}>Audit</button>
+                    </Link>
+                  </>
+                )}
               </nav>
             </div>
-            
+
             {/* User info and logout */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
               {/* user object is not defined in this file, so this block is commented out */}
@@ -299,8 +342,8 @@ export default function GroupsPage() {
           </div>
         </div>
       </header>
-        
-    
+
+
 
       <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px' }}>
         {/* Error/Success Messages */}
@@ -487,6 +530,164 @@ export default function GroupsPage() {
           </div>
         )}
 
+        {/* Permission Assignment Modal */}
+        {showPermissionModal && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1001,
+            padding: '20px'
+          }} onClick={() => setShowPermissionModal(false)}>
+            <div style={{
+              backgroundColor: 'white',
+              borderRadius: '12px',
+              maxWidth: '500px',
+              width: '100%',
+              padding: '24px',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+            }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+                <h2 style={{ fontSize: '20px', fontWeight: 600, color: '#111827', margin: 0 }}>Assign Permission</h2>
+                <button
+                  onClick={() => setShowPermissionModal(false)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: '24px',
+                    color: '#6b7280',
+                    cursor: 'pointer',
+                    padding: '4px 8px'
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Resource *
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g., bucket, file, or bucket-name"
+                    value={permissionResource}
+                    onChange={e => setPermissionResource(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      fontSize: '14px',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '6px',
+                      outline: 'none',
+                      boxSizing: 'border-box'
+                    }}
+                    onFocus={(e) => e.currentTarget.style.borderColor = '#4f46e5'}
+                    onBlur={(e) => e.currentTarget.style.borderColor = '#d1d5db'}
+                  />
+                </div>
+
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Access Type *
+                  </label>
+                  <select
+                    value={permissionAccess}
+                    onChange={e => setPermissionAccess(e.target.value as 'read' | 'write' | 'read-write')}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      fontSize: '14px',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '6px',
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                      backgroundColor: 'white'
+                    }}
+                    onFocus={(e) => e.currentTarget.style.borderColor = '#4f46e5'}
+                    onBlur={(e) => e.currentTarget.style.borderColor = '#d1d5db'}
+                  >
+                    <option value="read">Read</option>
+                    <option value="write">Write</option>
+                    <option value="read-write">Read-Write</option>
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '8px' }}>
+                  <button
+                    onClick={() => setShowPermissionModal(false)}
+                    style={{
+                      padding: '10px 20px',
+                      fontSize: '14px',
+                      fontWeight: 500,
+                      color: '#374151',
+                      backgroundColor: 'transparent',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      transition: 'background-color 0.2s'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#f3f4f6';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleAssignPermission}
+                    disabled={loading || !permissionResource.trim()}
+                    style={{
+                      padding: '10px 20px',
+                      fontSize: '14px',
+                      fontWeight: 500,
+                      color: 'white',
+                      backgroundColor: loading || !permissionResource.trim() ? '#9ca3af' : '#4f46e5',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: loading || !permissionResource.trim() ? 'not-allowed' : 'pointer',
+                      transition: 'background-color 0.2s'
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!loading && permissionResource.trim()) {
+                        e.currentTarget.style.backgroundColor = '#4338ca';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!loading && permissionResource.trim()) {
+                        e.currentTarget.style.backgroundColor = '#4f46e5';
+                      }
+                    }}
+                  >
+                    {loading ? 'Assigning...' : 'Assign Permission'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Create Group Form */}
         <div style={{
           backgroundColor: 'white',
@@ -579,6 +780,7 @@ export default function GroupsPage() {
                   <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>ID</th>
                   <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>Name</th>
                   <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>Actions</th>
+                  <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' }}>Remove</th>
                 </tr>
               </thead>
               <tbody>
@@ -606,7 +808,7 @@ export default function GroupsPage() {
                         View Details
                       </button>
                       <button
-                        onClick={() => handleAssignPermission(g.id)}
+                        onClick={() => handleOpenPermissionModal(g.id)}
                         disabled={loading}
                         style={{
                           padding: '6px 12px',
@@ -621,6 +823,36 @@ export default function GroupsPage() {
                         }}
                       >
                         Add Permission
+                      </button>
+                    </td>
+                    <td style={{ padding: '12px 16px' }}>
+                    <button
+                        onClick={() => handleDeleteGroup(g.id, g.name)}
+                        disabled={loading}
+                        style={{
+                          padding: '6px 12px',
+                          fontSize: '13px',
+                          fontWeight: 500,
+                          color: loading ? '#9ca3af' : '#dc2626',
+                          backgroundColor: 'transparent',
+                          border: '1px solid',
+                          borderColor: loading ? '#d1d5db' : '#dc2626',
+                          borderRadius: '6px',
+                          cursor: loading ? 'not-allowed' : 'pointer',
+                          transition: 'all 0.2s'
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!loading) {
+                            e.currentTarget.style.backgroundColor = '#fee2e2';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!loading) {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }
+                        }}
+                      >
+                        Delete
                       </button>
                     </td>
                   </tr>

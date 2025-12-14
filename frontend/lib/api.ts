@@ -106,3 +106,7 @@ export async function logoutAPI() {
     return res.data;
   }
   
+  export async function deleteGroup(groupId: number) {
+    const api = axiosWithAuth();
+    await api.delete(`/api/groups/${groupId}`);
+  }
