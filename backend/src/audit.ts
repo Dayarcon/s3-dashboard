@@ -65,7 +65,7 @@ router.get('/', authMiddleware, (req: AuthRequest, res) => {
     countParams.push(resource);
   }
 
-  const total = db.prepare(countSql).get(...countParams)?.total || 0;
+  const total = (db.prepare(countSql).get(...countParams) as {total: number } | undefined)?.total || 0;
 
   res.json({ logs, total, limit, offset });
 });

@@ -9,18 +9,26 @@ const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
 
+type User = {
+    id: number;
+    username: string;
+    password_hash: string;
+    role: string;
+    is_active: number;
+};
+
 // login
 router.post('/login', async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) return res.status(400).json({ error: 'username/password required' });
 
-  const user = findUserByUsername(username);
+  const user = findUserByUsername(username) as User | undefined;
   if (!user || !user.is_active) return res.status(401).json({ error: 'invalid credentials' });
 
   const ok = await bcrypt.compare(password, user.password_hash);
   if (!ok) return res.status(401).json({ error: 'invalid credentials' });
 
-  const token = jwt.sign({ sub: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  const token = jwt.sign({ sub: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions);
 
   insertAudit(user.id, 'login', 'auth', { ip: req.ip, username });
   res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
@@ -60,7 +68,7 @@ router.post('/logout', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'password_too_short' });
     }
   
-    const user = findUserByUsername(req.user!.username);
+    const user = findUserByUsername(req.user!.username) as User | undefined;
     if (!user) return res.status(404).json({ error: 'user_not_found' });
   
     const valid = await bcrypt.compare(currentPassword, user.password_hash);
@@ -77,13 +85,13 @@ router.post('/logout', authMiddleware, async (req: AuthRequest, res) => {
   router.post('/refresh', authMiddleware, async (req: AuthRequest, res) => {
     if (!req.user) return res.status(401).json({ error: 'unauthorized' });
     
-    const user = findUserByUsername(req.user.username);
+    const user = findUserByUsername(req.user.username) as User | undefined;
     if (!user || !user.is_active) return res.status(401).json({ error: 'user_inactive' });
   
     const token = jwt.sign(
       { sub: user.id, username: user.username, role: user.role },
       JWT_SECRET,
-      { expiresIn: JWT_EXPIRES_IN }
+      { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions
     );
   
     res.json({ token });
