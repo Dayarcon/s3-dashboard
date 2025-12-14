@@ -219,6 +219,8 @@ async function handleUploadFile(file: File) {
                     Files
                   </button>
                 </Link>
+                {user?.role === 'admin' && (
+                  <>
                 <Link href="/users" style={{ textDecoration: 'none' }}>
                   <button style={{
                     padding: '8px 16px',
@@ -291,6 +293,8 @@ async function handleUploadFile(file: File) {
                     Audit
                   </button>
                 </Link>
+                </>
+                )}
               </nav>
             </div>
             

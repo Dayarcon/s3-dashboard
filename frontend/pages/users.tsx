@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getGroups, assignUserToGroup, createUser, getUserDetails, deleteUser } from '../lib/api';
-import { axiosWithAuth } from '../lib/auth';
+import { axiosWithAuth, getUser } from '../lib/auth';
 import Router from 'next/router';
 import { getToken, logout } from '../lib/auth';
 import Link from 'next/link';
@@ -38,6 +38,7 @@ export default function UsersPage() {
 
   const [selectedUser, setSelectedUser] = useState<UserDetail | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [currentUser ,setCurrentUser] = useState<any>(null);
 
   useEffect(() => {
     const t = getToken();
@@ -45,6 +46,7 @@ export default function UsersPage() {
       Router.push('/login');
       return;
     }
+    setCurrentUser(getUser());
     fetchUsers();
     fetchGroups();
   }, []);
@@ -228,6 +230,8 @@ export default function UsersPage() {
                     cursor: 'pointer'
                   }}>Files</button>
                 </Link>
+                {currentUser?.role === 'admin' && (
+                  <>
                 <Link href="/users" style={{ textDecoration: 'none' }}>
                   <button style={{
                     padding: '8px 16px',
@@ -264,6 +268,8 @@ export default function UsersPage() {
                     cursor: 'pointer'
                   }}>Audit</button>
                 </Link>
+                </>
+                )}
               </nav>
             </div>
             
