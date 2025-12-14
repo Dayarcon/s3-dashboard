@@ -6,6 +6,12 @@ export function permissionMiddleware(resource: string, access: 'read' | 'write')
     return (req: AuthRequest, res: Response, next: NextFunction) => {
         if (!req.user) return res.status(401).json({ error: 'unauthorized' });
 
+        // Admin has full access
+        if (req.user.role === 'admin') {
+            return next();
+        }
+
+
         // get permissions from all groups user belongs to
         const stmt = db.prepare(`
             SELECT p.access FROM permissions p

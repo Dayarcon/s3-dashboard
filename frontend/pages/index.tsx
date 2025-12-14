@@ -104,7 +104,18 @@ const [newFileName, setNewFileName] = useState('');
       setSaveMessage('File saved successfully!')
       setTimeout(() => setSaveMessage(null), 3000)
     } catch(err: any) {
-      setError(err.message || 'Failed to save file')
+      console.error('Save error:', err);
+      if (err.response?.status === 401) {
+        setError('Your session has expired. Please log in again.');
+        setTimeout(() => {
+          logout();
+          Router.push('/login');
+        }, 2000);
+      } else if (err.response?.status === 403) {
+        setError('You do not have permission to write files. Please contact an administrator.');
+      } else {
+        setError(err.response?.data?.error || err.message || 'Failed to save file');
+      }
     } finally {
       setSaving(false)
     }

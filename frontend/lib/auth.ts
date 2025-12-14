@@ -25,5 +25,19 @@ export function axiosWithAuth() {
     if (tk) cfg.headers = { ...cfg.headers, Authorization: `Bearer ${tk}` };
     return cfg;
   });
+   // Response interceptor - handle 401 errors
+   instance.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      if (error.response?.status === 401) {
+        // Token expired or invalid - logout and redirect to login
+        logout();
+        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+      }
+      return Promise.reject(error);
+    }
+  );
   return instance;
 }
