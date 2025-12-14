@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { listBuckets, listPrefix, getFile, putFile } from '../lib/s3api'
 import Router from 'next/router';
-import { getToken, getUser, logout } from '../lib/auth';
+import { getToken, getUser, logout, checkTokenAndLogout } from '../lib/auth';
 import Link from 'next/link';
 import { deleteFile, deleteFiles, copyFile, moveFile, uploadFile, getFileMetadata, createFolder, deleteFolder } from '../lib/s3api';
 export default function Explorer(){
@@ -28,6 +28,11 @@ const [newFolderName, setNewFolderName] = useState('');
 
 
   useEffect(() => {
+    // Check token expiration on component mount
+    if (checkTokenAndLogout()) {
+      return; // User was logged out, don't proceed
+    }
+    
     const t = getToken();
     if (!t) {
       Router.push('/login');
