@@ -114,7 +114,13 @@ export async function logoutAPI() {
   export async function getGroupBuckets(groupId: number) {
     const api = axiosWithAuth();
     const res = await api.get(`/api/groups/${groupId}/buckets`);
-    return res.data;
+    // Normalize to array of bucket name strings. Backend may return rows like { id, bucket_name }.
+    const data = res.data;
+    if (!data) return [];
+    if (Array.isArray(data)) {
+      return data.map((d: any) => (typeof d === 'string' ? d : (d.bucket_name || d.name || d.bucket || ''))).filter(Boolean);
+    }
+    return [];
   }
 
   export async function addGroupBucket(groupId: number, bucketName: string) {

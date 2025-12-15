@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getGroups, createGroup, assignPermission, getGroupDetails, removePermission, removeUserFromGroup, deleteGroup, getGroupBuckets, addGroupBucket, removeGroupBucket } from '../lib/api';
 import { axiosWithAuth, getUser, getToken, logout, checkTokenAndLogout } from '../lib/auth';
+import { listBuckets } from '../lib/s3api';
 import Router from 'next/router';
 import Link from 'next/link';
 
@@ -30,6 +31,9 @@ export default function GroupsPage() {
   const [permissionGroupId, setPermissionGroupId] = useState<number | null>(null);
   const [permissionResource, setPermissionResource] = useState('');
   const [permissionAccess, setPermissionAccess] = useState<'read' | 'write' | 'read-write'>('read');
+  const [allBuckets, setAllBuckets] = useState<Array<{ name: string }>>([]);
+  const [bucketChecks, setBucketChecks] = useState<Record<string, boolean>>({});
+  const [initialBucketChecks, setInitialBucketChecks] = useState<Record<string, boolean>>({});
   const [currentUser, setCurrentUser] = useState<any>(null);
 
   useEffect(() => {
@@ -93,28 +97,81 @@ export default function GroupsPage() {
     setPermissionGroupId(groupId);
     setPermissionResource('');
     setPermissionAccess('read');
-    setShowPermissionModal(true);
+    // fetch buckets and group's assigned buckets, then open modal
+    (async () => {
+      setLoading(true);
+      try {
+        const buckets = await listBuckets();
+        setAllBuckets(buckets || []);
+        // fetch which buckets are already assigned to the group
+        try {
+          const assigned = await getGroupBuckets(groupId);
+          const checks: Record<string, boolean> = {};
+          (buckets || []).forEach((b: any) => {
+            checks[b.name] = assigned.includes(b.name);
+          });
+          setBucketChecks(checks);
+          setInitialBucketChecks({ ...checks });
+        } catch (e) {
+          // fallback: none assigned
+          const checks: Record<string, boolean> = {};
+          (buckets || []).forEach((b: any) => { checks[b.name] = false; });
+          setBucketChecks(checks);
+          setInitialBucketChecks({ ...checks });
+        }
+      } catch (err) {
+        console.error('failed to load buckets for permission modal', err);
+        setAllBuckets([]);
+        setBucketChecks({});
+        setInitialBucketChecks({});
+      } finally {
+        setLoading(false);
+        setShowPermissionModal(true);
+      }
+    })();
   }
 
   async function handleAssignPermission() {
-    if (!permissionGroupId || !permissionResource.trim()) return;
-
+    // Assign generic resource permission if provided AND handle bucket checkbox assignments
+    if (!permissionGroupId) return;
     setLoading(true);
     setError(null);
     setSuccess(null);
     try {
-      await assignPermission(permissionGroupId, permissionResource.trim(), permissionAccess);
-      setSuccess('Permission assigned successfully!');
+      // If a generic resource is provided, assign it as before
+      if (permissionResource.trim()) {
+        await assignPermission(permissionGroupId, permissionResource.trim(), permissionAccess);
+      }
+
+      // Compute bucket diffs between initialBucketChecks and current bucketChecks
+      const adds: string[] = [];
+      const removes: string[] = [];
+      for (const b of Object.keys(bucketChecks)) {
+        const before = !!initialBucketChecks[b];
+        const after = !!bucketChecks[b];
+        if (!before && after) adds.push(b);
+        if (before && !after) removes.push(b);
+      }
+
+      // Apply adds
+      for (const bn of adds) {
+        try { await addGroupBucket(permissionGroupId, bn); } catch (e) { console.error('failed to add group bucket', bn, e); }
+      }
+      for (const bn of removes) {
+        try { await removeGroupBucket(permissionGroupId, bn); } catch (e) { console.error('failed to remove group bucket', bn, e); }
+      }
+
+      setSuccess('Permissions updated successfully!');
       setTimeout(() => setSuccess(null), 3000);
       setShowPermissionModal(false);
-      // Refresh group details
+      // Refresh group details or groups list
       if (selectedGroup && selectedGroup.id === permissionGroupId) {
         handleViewDetails(permissionGroupId);
       } else {
         fetchGroups();
       }
     } catch (err: any) {
-      console.error('Failed to assign permission:', err);
+      console.error('Failed to assign permission or update buckets:', err);
       setError(err?.response?.data?.error || 'Failed to assign permission');
     } finally {
       setLoading(false);
@@ -696,32 +753,21 @@ export default function GroupsPage() {
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div>
-                  <label style={{
-                    display: 'block',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    color: '#374151',
-                    marginBottom: '8px'
-                  }}>
-                    Resource *
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, color: '#374151', marginBottom: '8px' }}>
+                    Resources *
                   </label>
-                  <input
-                    type="text"
-                    placeholder="e.g., bucket, file, or bucket-name"
-                    value={permissionResource}
-                    onChange={e => setPermissionResource(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '10px 12px',
-                      fontSize: '14px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px',
-                      outline: 'none',
-                      boxSizing: 'border-box'
-                    }}
-                    onFocus={(e) => e.currentTarget.style.borderColor = '#4f46e5'}
-                    onBlur={(e) => e.currentTarget.style.borderColor = '#d1d5db'}
-                  />
+                  <div style={{ maxHeight: '160px', overflow: 'auto', border: '1px solid #e5e7eb', borderRadius: '6px', padding: '8px', backgroundColor: '#fff' }}>
+                    {allBuckets && allBuckets.length > 0 ? (
+                      allBuckets.map((b) => (
+                        <label key={b.name} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 4px' }}>
+                          <input type="checkbox" checked={!!bucketChecks[b.name]} onChange={(e) => setBucketChecks(prev => ({ ...prev, [b.name]: e.target.checked }))} />
+                          <span style={{ fontSize: '14px', color: '#111827' }}>{b.name}</span>
+                        </label>
+                      ))
+                    ) : (
+                      <div style={{ color: '#6b7280', fontSize: '14px' }}>No buckets available</div>
+                    )}
+                  </div>
                 </div>
 
                 <div>
@@ -781,27 +827,25 @@ export default function GroupsPage() {
                   </button>
                   <button
                     onClick={handleAssignPermission}
-                    disabled={loading || !permissionResource.trim()}
+                    disabled={loading || (!permissionResource.trim() && !Object.keys(bucketChecks).some(b => bucketChecks[b] !== initialBucketChecks[b]))}
                     style={{
                       padding: '10px 20px',
                       fontSize: '14px',
                       fontWeight: 500,
                       color: 'white',
-                      backgroundColor: loading || !permissionResource.trim() ? '#9ca3af' : '#4f46e5',
+                      backgroundColor: loading || (!permissionResource.trim() && !Object.keys(bucketChecks).some(b => bucketChecks[b] !== initialBucketChecks[b])) ? '#9ca3af' : '#4f46e5',
                       border: 'none',
                       borderRadius: '6px',
-                      cursor: loading || !permissionResource.trim() ? 'not-allowed' : 'pointer',
+                      cursor: loading || (!permissionResource.trim() && !Object.keys(bucketChecks).some(b => bucketChecks[b] !== initialBucketChecks[b])) ? 'not-allowed' : 'pointer',
                       transition: 'background-color 0.2s'
                     }}
                     onMouseEnter={(e) => {
-                      if (!loading && permissionResource.trim()) {
-                        e.currentTarget.style.backgroundColor = '#4338ca';
-                      }
+                      const enabled = !loading && (permissionResource.trim() || Object.keys(bucketChecks).some(b => bucketChecks[b] !== initialBucketChecks[b]));
+                      if (enabled) e.currentTarget.style.backgroundColor = '#4338ca';
                     }}
                     onMouseLeave={(e) => {
-                      if (!loading && permissionResource.trim()) {
-                        e.currentTarget.style.backgroundColor = '#4f46e5';
-                      }
+                      const enabled = !loading && (permissionResource.trim() || Object.keys(bucketChecks).some(b => bucketChecks[b] !== initialBucketChecks[b]));
+                      if (enabled) e.currentTarget.style.backgroundColor = '#4f46e5';
                     }}
                   >
                     {loading ? 'Assigning...' : 'Assign Permission'}

@@ -56,7 +56,10 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-app.get('/api/buckets', authMiddleware, permissionMiddleware('bucket', 'read'), async (req, res) => {
+// Listing buckets: require authentication but allow visibility based on explicit bucket assignments.
+// We avoid requiring the generic 'bucket' permission here so that assigning a bucket to a group/user
+// is enough to make it visible to them.
+app.get('/api/buckets', authMiddleware, async (req, res) => {
   try {
     const buckets = await listBuckets();
     // If bucket assignments exist in the system, enforce strict visibility:
@@ -66,10 +69,15 @@ app.get('/api/buckets', authMiddleware, permissionMiddleware('bucket', 'read'), 
     try {
       const userReq = req as AuthRequest;
       if (userReq.user) {
+        // If the user is admin, bypass assignment filtering and return all buckets
+        if (userReq.user.role === 'admin') {
+          return res.json(buckets);
+        }
+
         const allowed = getAllowedBucketsForUser(userReq.user.sub);
 
-  const counts = db.prepare(`SELECT (SELECT COUNT(*) FROM group_buckets) + (SELECT COUNT(*) FROM user_buckets) as total`).get() as any;
-  const totalAssignments = counts ? Number(counts.total || 0) : 0;
+        const counts = db.prepare(`SELECT (SELECT COUNT(*) FROM group_buckets) + (SELECT COUNT(*) FROM user_buckets) as total`).get() as any;
+        const totalAssignments = counts ? Number(counts.total || 0) : 0;
 
         if (Array.isArray(allowed) && allowed.length > 0) {
           const filtered = buckets.filter((b: any) => allowed.includes(b.name));
