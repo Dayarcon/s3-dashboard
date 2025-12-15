@@ -55,7 +55,7 @@ export function checkTokenAndLogout(): boolean {
 }
 
 export function axiosWithAuth() {
-  const base = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
+  const base = process.env.NEXT_PUBLIC_BACKEND_URL;
   const instance = axios.create({ baseURL: base });
   
   // Request interceptor - check token expiration before sending request

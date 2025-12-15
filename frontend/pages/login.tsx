@@ -14,7 +14,7 @@ export default function LoginPage(){
     setErr('');
     setLoading(true);
     try {
-      const base = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
+      const base = process.env.NEXT_PUBLIC_BACKEND_URL;
       const res = await axios.post(`${base}/auth/login`, { username, password });
       const token = res.data.token;
       localStorage.setItem('s3dash_token', token);
