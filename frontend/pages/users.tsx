@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getGroups, assignUserToGroup, createUser, getUserDetails, deleteUser } from '../lib/api';
+import { getGroups, assignUserToGroup, createUser, getUserDetails, deleteUser, resetUserPassword } from '../lib/api';
 import { axiosWithAuth, getUser, getToken, logout, checkTokenAndLogout } from '../lib/auth';
 import Router from 'next/router';
 import Link from 'next/link';
@@ -37,6 +37,11 @@ export default function UsersPage() {
 
   const [selectedUser, setSelectedUser] = useState<UserDetail | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetUserId, setResetUserId] = useState<number | null>(null);
+  const [resetUsername, setResetUsername] = useState('');
+  const [resetPasswordInput, setResetPasswordInput] = useState('');
+  const [resetRequireChange, setResetRequireChange] = useState(true);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [showAssignGroupModal, setShowAssignGroupModal] = useState(false);
   const [assignGroupUserId, setAssignGroupUserId] = useState<number | null>(null);
@@ -949,6 +954,29 @@ export default function UsersPage() {
                         >
                           Assign Group
                         </button>
+                        <button
+                          onClick={() => {
+                            setResetUserId(u.id);
+                            setResetUsername(u.username);
+                            setResetPasswordInput('');
+                            setResetRequireChange(true);
+                            setShowResetModal(true);
+                          }}
+                          disabled={loading}
+                          style={{
+                            padding: '6px 12px',
+                            fontSize: '13px',
+                            fontWeight: 500,
+                            color: loading ? '#9ca3af' : '#6b7280',
+                            backgroundColor: 'transparent',
+                            border: '1px solid',
+                            borderColor: loading ? '#d1d5db' : '#6b7280',
+                            borderRadius: '6px',
+                            cursor: loading ? 'not-allowed' : 'pointer'
+                          }}
+                        >
+                          Reset Password
+                        </button>
                       </div>
                     </td>
                     <td style={{ padding: '12px 16px' }}>
@@ -1006,6 +1034,77 @@ export default function UsersPage() {
           )}
         </div>
       </div>
+
+      {showResetModal && resetUserId !== null && (
+        <div
+          style={{
+            position: 'fixed',
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 60
+          }}
+        >
+          <div style={{ background: 'white', padding: 20, borderRadius: 8, width: 520 }}>
+            <h3 style={{ marginTop: 0 }}>Reset password for {resetUsername}</h3>
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ display: 'block', fontSize: 13, marginBottom: 6 }}>New password (leave empty to auto-generate)</label>
+              <input
+                type="password"
+                value={resetPasswordInput}
+                onChange={(e) => setResetPasswordInput(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db' }}
+                placeholder="New temporary password"
+              />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <input type="checkbox" checked={resetRequireChange} onChange={(e) => setResetRequireChange(e.target.checked)} />
+                <span style={{ fontSize: 13 }}>Require user to change password on next login</span>
+              </label>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                onClick={() => setShowResetModal(false)}
+                style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #d1d5db', background: 'transparent' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setLoading(true);
+                  setError(null);
+                  setSuccess(null);
+                  try {
+                    const res = await resetUserPassword(resetUserId as number, resetPasswordInput || undefined, resetRequireChange);
+                    if (res?.tempPassword) {
+                      setSuccess(`Password reset. Temporary password: ${res.tempPassword}`);
+                    } else {
+                      setSuccess('Password reset successfully');
+                    }
+                    setShowResetModal(false);
+                    setTimeout(() => setSuccess(null), 8000);
+                  } catch (e: any) {
+                    console.error('Failed to reset password:', e);
+                    setError(e?.response?.data?.error || e?.message || 'Failed to reset password');
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+                disabled={loading}
+                style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #10b981', background: '#10b981', color: 'white' }}
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes spin {

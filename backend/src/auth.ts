@@ -15,6 +15,7 @@ type User = {
     password_hash: string;
     role: string;
     is_active: number;
+  must_change_password?: number;
 };
 
 // login
@@ -29,9 +30,8 @@ router.post('/login', async (req, res) => {
   if (!ok) return res.status(401).json({ error: 'invalid credentials' });
 
   const token = jwt.sign({ sub: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions);
-
   insertAudit(user.id, 'login', 'auth', { ip: req.ip, username });
-  res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+  res.json({ token, user: { id: user.id, username: user.username, role: user.role, must_change_password: !!user.must_change_password } });
 });
 
 // optional: create user (only admin)
@@ -75,8 +75,7 @@ router.post('/logout', authMiddleware, async (req: AuthRequest, res) => {
     if (!valid) return res.status(401).json({ error: 'invalid_current_password' });
   
     const hash = await bcrypt.hash(newPassword, 10);
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, user.id);
-    
+    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(hash, user.id);
     insertAudit(user.id, 'password_change', 'auth', { ip: req.ip });
     res.json({ ok: true });
   });

@@ -133,3 +133,12 @@ export async function logoutAPI() {
     // encode bucketName into URL
     await api.delete(`/api/groups/${groupId}/buckets/${encodeURIComponent(bucketName)}`);
   }
+
+  export async function resetUserPassword(userId: number, newPassword?: string, must_change?: boolean) {
+    const api = axiosWithAuth();
+    const body: any = {};
+    if (newPassword !== undefined) body.newPassword = newPassword;
+    if (must_change !== undefined) body.must_change = must_change;
+    const res = await api.post(`/api/users/${userId}/reset-password`, body);
+    return res.data;
+  }

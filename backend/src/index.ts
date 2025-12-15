@@ -110,21 +110,24 @@ function ensureBucketAllowed(req: AuthRequest, res: express.Response, bucket: st
   return true;
 }
 
-app.get('/api/list', async (req, res) => {
+app.get('/api/list', authMiddleware, async (req, res) => {
   try {
     const bucket = String(req.query.bucket || '');
     const prefix = String(req.query.prefix || '');
     if (!bucket) return res.status(400).json({ error: 'missing_bucket' });
+    // ensure the requesting user is allowed to view this bucket
+    if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     const data = await listAtPrefix(bucket, prefix);
     res.json(data);
   } catch (err) { console.error(err); res.status(500).json({ error: 'list_failed' }); }
 });
 
-app.get('/api/file', async (req, res) => {
+app.get('/api/file', authMiddleware, async (req, res) => {
   try {
     const bucket = String(req.query.bucket || '');
     const key = String(req.query.key || '');
     if (!bucket || !key) return res.status(400).json({ error: 'missing_params' });
+    if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     const content = await getObjectContent(bucket, key);
     res.send(content);
   } catch (err) { console.error(err); res.status(500).json({ error: 'get_failed' }); }
@@ -207,6 +210,7 @@ app.get('/api/file/info', authMiddleware, async (req, res) => {
     const bucket = String(req.query.bucket || '');
     const key = String(req.query.key || '');
     if (!bucket || !key) return res.status(400).json({ error: 'missing_params' });
+    if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     const metadata = await getObjectMetadata(bucket, key);
     res.json(metadata);
   } catch (err: any) {

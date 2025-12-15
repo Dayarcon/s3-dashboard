@@ -238,6 +238,43 @@ router.put('/:userId', authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
+// Reset password (admin only). If `newPassword` is provided in body, use it; otherwise generate a random temp password and return it.
+router.post('/:userId/reset-password', authMiddleware, async (req: AuthRequest, res) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ error: 'admin_only' });
+  }
+
+  const userId = Number(req.params.userId);
+  if (!userId || isNaN(userId)) return res.status(400).json({ error: 'invalid_user_id' });
+
+  const { newPassword, must_change } = req.body as { newPassword?: string; must_change?: boolean };
+
+  try {
+    const user = db.prepare('SELECT id, username FROM users WHERE id = ?').get(userId);
+    if (!user) return res.status(404).json({ error: 'user_not_found' });
+
+    let passwordToStore = newPassword;
+    let generatedTemp: string | null = null;
+    if (!passwordToStore) {
+      // generate a temporary password
+      generatedTemp = Math.random().toString(36).slice(-10) + Math.random().toString(36).slice(-4);
+      passwordToStore = generatedTemp;
+    }
+
+  const hash = await bcrypt.hash(passwordToStore, 10);
+  const setMustChange = (generatedTemp ? true : !!must_change) ? 1 : 0;
+  db.prepare('UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?').run(hash, setMustChange, userId);
+
+    // Optionally insert an audit log (if you have auditing). For now, return success and temp password if generated.
+    const resp: any = { ok: true };
+    if (generatedTemp) resp.tempPassword = generatedTemp;
+    res.json(resp);
+  } catch (err: any) {
+    console.error('reset password failed', err);
+    res.status(500).json({ error: 'reset_failed', detail: err.message });
+  }
+});
+
 // Activate/Deactivate user
 router.patch('/:userId/status', authMiddleware, (req: AuthRequest, res) => {
   if (req.user?.role !== 'admin') {

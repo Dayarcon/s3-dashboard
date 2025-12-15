@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'admin',
   is_active INTEGER NOT NULL DEFAULT 1,
+  must_change_password INTEGER NOT NULL DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -69,9 +70,21 @@ CREATE TABLE IF NOT EXISTS user_buckets (
 );
 `);
 
+// Migration: ensure `must_change_password` column exists on users table (for older DBs)
+const info = db.prepare("PRAGMA table_info('users')").all() as Array<any>;
+if (!info.find(col => col.name === 'must_change_password')) {
+  try {
+    db.prepare('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0').run();
+    console.log('Added must_change_password column to users table');
+  } catch (err: any) {
+    // ignore migration errors
+    console.error('Failed to add must_change_password column (may already exist):', err?.message || err);
+  }
+}
+
 // helper functions
 export function findUserByUsername(username: string) {
-  return db.prepare('SELECT id, username, password_hash, role, is_active FROM users WHERE username = ?').get(username);
+  return db.prepare('SELECT id, username, password_hash, role, is_active, must_change_password FROM users WHERE username = ?').get(username);
 }
 
 export function createUser(username: string, passwordHash: string, role = 'admin') {
