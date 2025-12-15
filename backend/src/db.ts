@@ -52,6 +52,21 @@ CREATE TABLE IF NOT EXISTS user_groups (
     FOREIGN KEY (user_id) REFERENCES users(id),
     FOREIGN KEY (group_id) REFERENCES groups(id)
 );
+
+-- Optional bucket assignment tables: assign buckets to groups or users
+CREATE TABLE IF NOT EXISTS group_buckets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL,
+  bucket_name TEXT NOT NULL,
+  FOREIGN KEY (group_id) REFERENCES groups(id)
+);
+
+CREATE TABLE IF NOT EXISTS user_buckets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  bucket_name TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
 `);
 
 // helper functions
@@ -86,4 +101,20 @@ export async function ensureSuperAdminFromEnv() {
   const hash = await bcrypt.hash(password, 10);
   createUser(username, hash, 'admin');
   console.log('Created super admin user:', username);
+}
+
+// Return list of allowed bucket names for a user based on group assignments or direct user assignments.
+// If the returned array is empty it means no explicit assignments exist (caller may treat that as "no restriction").
+export function getAllowedBucketsForUser(userId: number) {
+  const stmt = db.prepare(`
+    SELECT DISTINCT bucket_name as name FROM (
+      SELECT gb.bucket_name FROM group_buckets gb
+      JOIN user_groups ug ON ug.group_id = gb.group_id
+      WHERE ug.user_id = ?
+      UNION
+      SELECT ub.bucket_name FROM user_buckets ub WHERE ub.user_id = ?
+    )
+  `);
+  const rows = stmt.all(userId, userId) as Array<{ name: string }>;
+  return rows.map(r => r.name);
 }

@@ -10,8 +10,8 @@ import { listBuckets, listAtPrefix, getObjectContent, putObjectContent, deleteOb
   getObjectMetadata,
   createFolder  } from './s3';
 import authRoutes from './auth';
-import { ensureSuperAdminFromEnv } from './db';
-import { authMiddleware } from './middleware/authMiddleware';
+import { ensureSuperAdminFromEnv, getAllowedBucketsForUser } from './db';
+import { authMiddleware, AuthRequest } from './middleware/authMiddleware';
 import groupRoutes from './groups';
 import { permissionMiddleware } from './middleware/permissionMiddleware';
 import userRoutes from './users';
@@ -57,9 +57,37 @@ app.get('/api/health', async (req, res) => {
 });
 
 app.get('/api/buckets', authMiddleware, permissionMiddleware('bucket', 'read'), async (req, res) => {
-  try { const buckets = await listBuckets(); res.json(buckets); }
-  catch (err) { console.error(err); res.status(500).json({ error: 'list_buckets_failed' }); }
+  try {
+    const buckets = await listBuckets();
+    // If user has explicit bucket assignments, show only those buckets
+    try {
+      const userReq = req as AuthRequest;
+      if (userReq.user) {
+        const allowed = getAllowedBucketsForUser(userReq.user.sub);
+        if (Array.isArray(allowed) && allowed.length > 0) {
+          const filtered = buckets.filter((b: any) => allowed.includes(b.name));
+          return res.json(filtered);
+        }
+      }
+    } catch (e) {
+      console.error('failed to filter buckets by assignment', e);
+    }
+
+    res.json(buckets);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'list_buckets_failed' }); }
 });
+
+// helper to ensure bucket belongs to user's allowed buckets (if any assignments exist)
+function ensureBucketAllowed(req: AuthRequest, res: express.Response, bucket: string) {
+  if (!req.user) return res.status(401).json({ error: 'unauthorized' });
+  if (req.user.role === 'admin') return true;
+  const allowed = getAllowedBucketsForUser(req.user.sub);
+  if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(bucket)) {
+    res.status(403).json({ error: 'forbidden_bucket' });
+    return false;
+  }
+  return true;
+}
 
 app.get('/api/list', async (req, res) => {
   try {
@@ -85,6 +113,7 @@ app.put('/api/file', authMiddleware, permissionMiddleware('file', 'write'), asyn
   try {
     const { bucket, key, content } = req.body;
     if (!bucket || !key) return res.status(400).json({ error: 'missing_params' });
+    if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     await putObjectContent(bucket, key, content);
     res.json({ ok: true });
   } catch (err) { console.error(err); res.status(500).json({ error: 'put_failed' }); }
@@ -94,6 +123,7 @@ app.delete('/api/file', authMiddleware, permissionMiddleware('file', 'write'), a
   try {
     const { bucket, key } = req.body;
     if (!bucket || !key) return res.status(400).json({ error: 'missing_params' });
+    if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     await deleteObject(bucket, key);
     res.json({ ok: true });
   } catch (err: any) {
@@ -109,6 +139,7 @@ app.post('/api/files/delete', authMiddleware, permissionMiddleware('file', 'writ
     if (!bucket || !Array.isArray(keys) || keys.length === 0) {
       return res.status(400).json({ error: 'missing_params' });
     }
+    if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     const result = await deleteObjects(bucket, keys);
     res.json(result);
   } catch (err: any) {
@@ -124,6 +155,7 @@ app.post('/api/file/copy', authMiddleware, permissionMiddleware('file', 'write')
     if (!bucket || !sourceKey || !destKey) {
       return res.status(400).json({ error: 'missing_params' });
     }
+    if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     await copyObject(bucket, sourceKey, destKey);
     res.json({ ok: true });
   } catch (err: any) {
@@ -139,6 +171,7 @@ app.post('/api/file/move', authMiddleware, permissionMiddleware('file', 'write')
     if (!bucket || !sourceKey || !destKey) {
       return res.status(400).json({ error: 'missing_params' });
     }
+    if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     await moveObject(bucket, sourceKey, destKey);
     res.json({ ok: true });
   } catch (err: any) {
@@ -172,6 +205,7 @@ app.post('/api/file/upload',
       
       const { bucket, key } = req.body;
       if (!bucket || !key) return res.status(400).json({ error: 'missing_params' });
+      if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
 
       const cmd = new PutObjectCommand({
         Bucket: bucket,
@@ -199,6 +233,7 @@ app.post('/api/folder/create',
       if (!bucket || !folderPath) {
         return res.status(400).json({ error: 'missing_params' });
       }
+      if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
       await createFolder(bucket, folderPath);
       res.json({ ok: true, folderPath });
     } catch (err: any) {
@@ -218,6 +253,7 @@ app.delete('/api/folder',
       if (!bucket || !folderPath) {
         return res.status(400).json({ error: 'missing_params' });
       }
+      if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
       // Ensure folder path ends with '/' for deletion
       const folderKey = folderPath.endsWith('/') ? folderPath : `${folderPath}/`;
       await deleteObject(bucket, folderKey);
