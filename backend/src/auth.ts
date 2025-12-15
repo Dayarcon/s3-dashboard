@@ -2,7 +2,7 @@
 import express from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import { findUserByUsername, createUser, insertAudit, db } from './db';
+import { findUserByUsername, createUser, insertAudit, db, getAllowedBucketsForUser } from './db';
 import { authMiddleware, AuthRequest } from './middleware/authMiddleware';
 
 const router = express.Router();
@@ -96,4 +96,29 @@ router.post('/logout', authMiddleware, async (req: AuthRequest, res) => {
   
     res.json({ token });
   });
+
+// Current user info + permissions + allowed buckets
+router.get('/me', authMiddleware, (req: AuthRequest, res) => {
+  if (!req.user) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    const userId = req.user.sub;
+    const user = db.prepare('SELECT id, username, role, is_active FROM users WHERE id = ?').get(userId) as any;
+    if (!user) return res.status(404).json({ error: 'user_not_found' });
+
+    // gather permissions from groups
+    const perms = db.prepare(`
+      SELECT DISTINCT p.resource, p.access
+      FROM permissions p
+      JOIN user_groups ug ON ug.group_id = p.group_id
+      WHERE ug.user_id = ?
+    `).all(userId) as Array<{ resource: string; access: string }>;
+
+    const allowedBuckets = getAllowedBucketsForUser(userId);
+
+    res.json({ user: { id: user.id, username: user.username, role: user.role }, permissions: perms, allowedBuckets });
+  } catch (err: any) {
+    console.error('me_error', err);
+    res.status(500).json({ error: 'failed_to_get_me', detail: err.message });
+  }
+});
 export default router;

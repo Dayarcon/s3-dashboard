@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getGroups, createGroup, assignPermission, getGroupDetails, removePermission, removeUserFromGroup, deleteGroup } from '../lib/api';
+import { getGroups, createGroup, assignPermission, getGroupDetails, removePermission, removeUserFromGroup, deleteGroup, getGroupBuckets, addGroupBucket, removeGroupBucket } from '../lib/api';
 import { axiosWithAuth, getUser, getToken, logout, checkTokenAndLogout } from '../lib/auth';
 import Router from 'next/router';
 import Link from 'next/link';
@@ -14,6 +14,7 @@ interface GroupDetail {
   name: string;
   permissions?: Array<{ id: number; resource: string; access: string }>;
   users?: Array<{ id: number; username: string }>;
+  buckets?: string[];
 }
 
 export default function GroupsPage() {
@@ -23,6 +24,7 @@ export default function GroupsPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<GroupDetail | null>(null);
+  const [newBucketName, setNewBucketName] = useState('');
   const [showDetails, setShowDetails] = useState(false);
   const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [permissionGroupId, setPermissionGroupId] = useState<number | null>(null);
@@ -124,11 +126,59 @@ export default function GroupsPage() {
     setError(null);
     try {
       const details = await getGroupDetails(groupId);
+      // fetch buckets assigned to group
+      try {
+        const buckets = await getGroupBuckets(groupId);
+        details.buckets = buckets;
+      } catch (e) {
+        details.buckets = [];
+      }
       setSelectedGroup(details);
       setShowDetails(true);
     } catch (err: any) {
       console.error('Failed to fetch group details:', err);
       setError(err?.response?.data?.error || 'Failed to load group details');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAddGroupBucket() {
+    if (!selectedGroup) return;
+    const groupId = selectedGroup.id;
+    if (!newBucketName.trim()) return;
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      await addGroupBucket(groupId, newBucketName.trim());
+      setSuccess('Bucket assigned to group successfully!');
+      setNewBucketName('');
+      // refresh details
+      await handleViewDetails(groupId);
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err: any) {
+      console.error('Failed to add bucket to group:', err);
+      setError(err?.response?.data?.error || 'Failed to add bucket to group');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRemoveGroupBucket(bucketName: string) {
+    if (!selectedGroup) return;
+    if (!confirm(`Remove bucket "${bucketName}" from group ${selectedGroup.name}?`)) return;
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      await removeGroupBucket(selectedGroup.id, bucketName);
+      setSuccess('Bucket removed from group');
+      await handleViewDetails(selectedGroup.id);
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err: any) {
+      console.error('Failed to remove bucket from group:', err);
+      setError(err?.response?.data?.error || 'Failed to remove bucket from group');
     } finally {
       setLoading(false);
     }
@@ -528,6 +578,76 @@ export default function GroupsPage() {
                   ) : (
                     <p style={{ color: '#6b7280', fontSize: '14px' }}>No users in this group</p>
                   )}
+                </div>
+
+                {/* Buckets Section */}
+                <div style={{ marginTop: '24px' }}>
+                  <h3 style={{ fontSize: '16px', fontWeight: 600, color: '#111827', marginBottom: '12px' }}>
+                    Buckets ({selectedGroup.buckets?.length || 0})
+                  </h3>
+                  {selectedGroup.buckets && selectedGroup.buckets.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+                      {selectedGroup.buckets.map((b) => (
+                        <div key={b} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', backgroundColor: '#f9fafb', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+                          <div style={{ fontSize: '14px', color: '#111827', fontWeight: 500 }}>{b}</div>
+                          <button
+                            onClick={() => handleRemoveGroupBucket(b)}
+                            disabled={loading}
+                            style={{
+                              padding: '6px 12px',
+                              fontSize: '12px',
+                              fontWeight: 500,
+                              color: '#dc2626',
+                              backgroundColor: 'transparent',
+                              border: '1px solid #dc2626',
+                              borderRadius: '6px',
+                              cursor: loading ? 'not-allowed' : 'pointer'
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p style={{ color: '#6b7280', fontSize: '14px', marginBottom: '12px' }}>No buckets assigned to this group</p>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <input
+                      type="text"
+                      placeholder="Bucket name to assign"
+                      value={newBucketName}
+                      onChange={e => setNewBucketName(e.target.value)}
+                      style={{
+                        flex: 1,
+                        padding: '10px 12px',
+                        fontSize: '14px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '6px',
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                      onFocus={(e) => e.currentTarget.style.borderColor = '#4f46e5'}
+                      onBlur={(e) => e.currentTarget.style.borderColor = '#d1d5db'}
+                    />
+                    <button
+                      onClick={handleAddGroupBucket}
+                      disabled={loading || !newBucketName.trim()}
+                      style={{
+                        padding: '10px 16px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        color: 'white',
+                        backgroundColor: loading || !newBucketName.trim() ? '#9ca3af' : '#4f46e5',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: loading || !newBucketName.trim() ? 'not-allowed' : 'pointer'
+                      }}
+                    >
+                      {loading ? 'Assigning...' : 'Assign Bucket'}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

@@ -110,3 +110,20 @@ export async function logoutAPI() {
     const api = axiosWithAuth();
     await api.delete(`/api/groups/${groupId}`);
   }
+
+  export async function getGroupBuckets(groupId: number) {
+    const api = axiosWithAuth();
+    const res = await api.get(`/api/groups/${groupId}/buckets`);
+    return res.data;
+  }
+
+  export async function addGroupBucket(groupId: number, bucketName: string) {
+    const api = axiosWithAuth();
+    return (await api.post(`/api/groups/${groupId}/buckets`, { bucket_name: bucketName })).data;
+  }
+
+  export async function removeGroupBucket(groupId: number, bucketName: string) {
+    const api = axiosWithAuth();
+    // encode bucketName into URL
+    await api.delete(`/api/groups/${groupId}/buckets/${encodeURIComponent(bucketName)}`);
+  }

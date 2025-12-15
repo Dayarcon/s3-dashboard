@@ -64,14 +64,39 @@ const [newFolderName, setNewFolderName] = useState('');
   };
   
   useEffect(()=>{ 
-    setLoading(true)
-    listBuckets()
-      .then(setBuckets)
-      .catch((err) => {
+    (async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        // refresh permissions + allowed buckets first (best-effort)
+        let me: any = null;
+        try { me = await fetchMe(); } catch (e) { /* ignore */ }
+        if (me) {
+          setPermissions(me.permissions || []);
+          setAllowedBuckets(me.allowedBuckets || []);
+          if (me.user) {
+            setUser(me.user);
+            try { localStorage.setItem('s3dash_user', JSON.stringify(me.user)); } catch(e) {}
+          }
+        }
+
+        const all = await listBuckets();
+        let visible = all;
+        const allowed = me?.allowedBuckets || allowedBuckets;
+        if (Array.isArray(allowed) && allowed.length > 0) {
+          visible = (all || []).filter((b: any) => allowed.includes(b.name));
+        }
+        setBuckets(visible || []);
+        if (visible && visible.length === 1) {
+          setSelectedBucket(visible[0].name);
+        }
+      } catch (err: any) {
         console.error('Failed to load buckets:', err)
         setError('Failed to load buckets. Please check if the backend is running.')
-      })
-      .finally(() => setLoading(false))
+      } finally {
+        setLoading(false)
+      }
+    })()
   },[])
 
   async function load(pfx=''){

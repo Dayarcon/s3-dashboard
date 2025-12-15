@@ -77,7 +77,11 @@ router.get('/:id', authMiddleware, (req: AuthRequest, res) => {
     WHERE group_id = ?
   `).all(groupId);
 
-  res.json({ group, users, permissions });
+  const buckets = db.prepare(`
+    SELECT id, bucket_name FROM group_buckets WHERE group_id = ?
+  `).all(groupId) as Array<{ id: number; bucket_name: string }>;
+
+  res.json({ group, users, permissions, buckets });
 });
 
 /* ---------------------------------------------------
@@ -107,6 +111,45 @@ router.post('/:groupId/permissions', authMiddleware, (req: AuthRequest, res) => 
     VALUES (?, ?, ?)
   `).run(groupId, resource, access);
 
+  res.json({ ok: true });
+});
+
+/* ---------------------------------------------------
+   Assign Bucket to Group
+--------------------------------------------------- */
+router.post('/:groupId/buckets', authMiddleware, (req: AuthRequest, res) => {
+  if (!requireAdmin(req, res)) return;
+  const groupId = Number(req.params.groupId);
+  const { bucket_name } = req.body;
+  if (!bucket_name) return res.status(400).json({ error: 'bucket_name_required' });
+
+  const exists = db.prepare(`SELECT id FROM group_buckets WHERE group_id = ? AND bucket_name = ?`).get(groupId, bucket_name);
+  if (exists) return res.status(409).json({ error: 'bucket_already_assigned' });
+
+  db.prepare(`INSERT INTO group_buckets (group_id, bucket_name) VALUES (?, ?)`).run(groupId, bucket_name);
+  res.json({ ok: true });
+});
+
+/* ---------------------------------------------------
+   List Group Buckets
+--------------------------------------------------- */
+router.get('/:groupId/buckets', authMiddleware, (req: AuthRequest, res) => {
+  if (!requireAdmin(req, res)) return;
+  const groupId = Number(req.params.groupId);
+  const rows = db.prepare(`SELECT id, bucket_name FROM group_buckets WHERE group_id = ?`).all(groupId);
+  res.json(rows.map((r: any) => ({ id: r.id, bucket_name: r.bucket_name })));
+});
+
+/* ---------------------------------------------------
+   Remove Bucket from Group
+--------------------------------------------------- */
+router.delete('/:groupId/buckets/:bucketName', authMiddleware, (req: AuthRequest, res) => {
+  if (!requireAdmin(req, res)) return;
+  const groupId = Number(req.params.groupId);
+  const bucketName = decodeURIComponent(String(req.params.bucketName || ''));
+  if (!bucketName) return res.status(400).json({ error: 'bucket_name_required' });
+
+  db.prepare(`DELETE FROM group_buckets WHERE group_id = ? AND bucket_name = ?`).run(groupId, bucketName);
   res.json({ ok: true });
 });
 

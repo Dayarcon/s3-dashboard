@@ -59,15 +59,28 @@ app.get('/api/health', async (req, res) => {
 app.get('/api/buckets', authMiddleware, permissionMiddleware('bucket', 'read'), async (req, res) => {
   try {
     const buckets = await listBuckets();
-    // If user has explicit bucket assignments, show only those buckets
+    // If bucket assignments exist in the system, enforce strict visibility:
+    // - if user has allowed buckets -> return only those
+    // - if user has no allowed buckets -> return empty list
+    // If NO assignments exist at all in the DB, fall back to returning all buckets.
     try {
       const userReq = req as AuthRequest;
       if (userReq.user) {
         const allowed = getAllowedBucketsForUser(userReq.user.sub);
+
+  const counts = db.prepare(`SELECT (SELECT COUNT(*) FROM group_buckets) + (SELECT COUNT(*) FROM user_buckets) as total`).get() as any;
+  const totalAssignments = counts ? Number(counts.total || 0) : 0;
+
         if (Array.isArray(allowed) && allowed.length > 0) {
           const filtered = buckets.filter((b: any) => allowed.includes(b.name));
           return res.json(filtered);
         }
+
+        if (totalAssignments > 0) {
+          // assignments exist but user has none -> return empty list (no visibility)
+          return res.json([]);
+        }
+        // else: no assignments exist in system -> fallthrough and return all buckets
       }
     } catch (e) {
       console.error('failed to filter buckets by assignment', e);
