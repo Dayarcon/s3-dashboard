@@ -94,3 +94,10 @@ export function axiosWithAuth() {
   );
   return instance;
 }
+
+// Fetch current user info, permissions and allowed buckets from backend
+export async function fetchMe() {
+  const api = axiosWithAuth();
+  const res = await api.get('/auth/me');
+  return res.data;
+}

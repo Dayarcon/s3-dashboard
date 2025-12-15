@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { listBuckets, listPrefix, getFile, putFile } from '../lib/s3api'
 import Router from 'next/router';
-import { getToken, getUser, logout, checkTokenAndLogout } from '../lib/auth';
+import { getToken, getUser, logout, checkTokenAndLogout, fetchMe } from '../lib/auth';
 import Link from 'next/link';
 import { deleteFile, deleteFiles, copyFile, moveFile, uploadFile, getFileMetadata, createFolder, deleteFolder } from '../lib/s3api';
 export default function Explorer(){
@@ -18,6 +18,8 @@ export default function Explorer(){
   const [error, setError] = useState<string | null>(null)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [user, setUser] = useState<any>(null)
+  const [permissions, setPermissions] = useState<Array<{ resource: string, access: string }>>([]);
+  const [allowedBuckets, setAllowedBuckets] = useState<string[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
 const [showUploadModal, setShowUploadModal] = useState(false);
 const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -38,6 +40,21 @@ const [newFolderName, setNewFolderName] = useState('');
       Router.push('/login');
     } else {
       setUser(getUser());
+      // fetch permissions + allowed buckets
+      fetchMe().then((data) => {
+        if (data) {
+          setPermissions(data.permissions || []);
+          setAllowedBuckets(data.allowedBuckets || []);
+          // update local user if returned
+          if (data.user) {
+            setUser(data.user);
+            try { localStorage.setItem('s3dash_user', JSON.stringify(data.user)); } catch(e) {}
+          }
+        }
+      }).catch(err => {
+        // ignore - fetchMe may fail for unauthenticated flows
+        console.debug('fetchMe failed', err?.response?.data || err.message || err);
+      });
     }
   }, []);
 
@@ -107,7 +124,7 @@ const [newFolderName, setNewFolderName] = useState('');
     setError(null)
     setSaveMessage(null)
     try {
-      await putFile(selectedBucket, selectedFile.key, content)
+  await putFile(selectedBucket, selectedFile.key, content)
       setSaveMessage('File saved successfully!')
       setTimeout(() => setSaveMessage(null), 3000)
     } catch(err: any) {
@@ -127,6 +144,35 @@ const [newFolderName, setNewFolderName] = useState('');
       setSaving(false)
     }
   }
+
+  // permission helpers
+  function hasWritePermissionForFile(): boolean {
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    // look for 'file' or 'file:<bucket>' permission with write or read-write
+    return permissions.some(p => {
+      if (!p || !p.resource) return false;
+      if (p.access !== 'write' && p.access !== 'read-write') return false;
+      if (p.resource === 'file') return true;
+      if (selectedBucket && p.resource === `file:${selectedBucket}`) return true;
+      return false;
+    });
+  }
+
+  function hasWritePermissionForFolder(): boolean {
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    return permissions.some(p => {
+      if (!p || !p.resource) return false;
+      if (p.access !== 'write' && p.access !== 'read-write') return false;
+      if (p.resource === 'folder') return true;
+      if (selectedBucket && p.resource === `folder:${selectedBucket}`) return true;
+      return false;
+    });
+  }
+
+  const canWriteFile = hasWritePermissionForFile();
+  const canWriteFolder = hasWritePermissionForFolder();
 
   function getFileName(key: string) {
     return key.split('/').pop() || key
@@ -497,6 +543,7 @@ async function handleDeleteFolder(folderPath: string) {
                             </svg>
                             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{getFolderName(f)}</span>
                           </button>
+                          {canWriteFolder && (
                           <button
                             className="folder-delete-btn"
                             onClick={(e) => {
@@ -521,6 +568,7 @@ async function handleDeleteFolder(folderPath: string) {
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                             </svg>
                           </button>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -593,6 +641,7 @@ async function handleDeleteFolder(folderPath: string) {
                               </span>
                             )}
                           </button>
+                          {canWriteFile && (
                           <button
                             className="file-rename-btn"
                             onClick={(e) => {
@@ -621,6 +670,8 @@ async function handleDeleteFolder(folderPath: string) {
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                             </svg>
                           </button>
+                          )}
+                          {canWriteFile && (
                           <button
                             className="file-delete-btn"
                             onClick={(e) => {
@@ -645,6 +696,7 @@ async function handleDeleteFolder(folderPath: string) {
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                             </svg>
                           </button>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -703,6 +755,7 @@ async function handleDeleteFolder(folderPath: string) {
                 ))}
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
+                {canWriteFolder && (
                 <button
                   onClick={() => setShowCreateFolderModal(true)}
                   style={{
@@ -730,6 +783,8 @@ async function handleDeleteFolder(folderPath: string) {
                   </svg>
                   New Folder
                 </button>
+                )}
+                {canWriteFile && (
                 <button
                   onClick={() => setShowUploadModal(true)}
                   style={{
@@ -757,7 +812,8 @@ async function handleDeleteFolder(folderPath: string) {
                   </svg>
                   Upload
                 </button>
-                {selectedFiles.size > 0 && (
+                )}
+                {selectedFiles.size > 0 && canWriteFile && (
                   <button
                     onClick={handleBulkDelete}
                     style={{
@@ -825,6 +881,7 @@ async function handleDeleteFolder(folderPath: string) {
                     </svg>
                     <span style={{ fontSize: '14px', fontWeight: 500, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedFile.key}</span>
                   </div>
+                  {canWriteFile && (
                   <button 
                     onClick={saveFile}
                     disabled={saving}
@@ -857,6 +914,7 @@ async function handleDeleteFolder(folderPath: string) {
                       </>
                     )}
                   </button>
+                  )}
                 </div>
                 
                 {/* Text Editor */}
