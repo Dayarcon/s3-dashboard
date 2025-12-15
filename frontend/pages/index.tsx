@@ -27,6 +27,8 @@ const [showMoveModal, setShowMoveModal] = useState(false);
 const [showCreateFolderModal, setShowCreateFolderModal] = useState(false);
 const [newFileName, setNewFileName] = useState('');
 const [newFolderName, setNewFolderName] = useState('');
+const [showCreateFileModal, setShowCreateFileModal] = useState(false);
+const [newFileContent, setNewFileContent] = useState('');
 
 
   useEffect(() => {
@@ -279,6 +281,30 @@ async function handleCreateFolder() {
       setError('You do not have permission to create folders. Please contact an administrator.');
     } else {
       setError(err.response?.data?.error || 'Failed to create folder');
+    }
+  }
+}
+
+// Create file
+async function handleCreateFile() {
+  if (!selectedBucket || !newFileName.trim()) return;
+  const key = prefix ? `${prefix}${newFileName.trim()}` : newFileName.trim();
+  try {
+    await putFile(selectedBucket, key, newFileContent || '');
+    setSaveMessage('File created successfully!');
+    setNewFileName('');
+    setNewFileContent('');
+    setShowCreateFileModal(false);
+    // reload list and open the file
+    load(prefix);
+    setSelectedFile({ key });
+    setContent(newFileContent || '');
+    setTimeout(() => setSaveMessage(null), 3000);
+  } catch (err: any) {
+    if (err.response?.status === 403) {
+      setError('You do not have permission to create files. Please contact an administrator.');
+    } else {
+      setError(err.response?.data?.error || 'Failed to create file');
     }
   }
 }
@@ -811,6 +837,31 @@ async function handleDeleteFolder(folderPath: string) {
                 )}
                 {canWriteFile && (
                 <button
+                  onClick={() => setShowCreateFileModal(true)}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    color: '#06b6d4',
+                    backgroundColor: 'transparent',
+                    border: '1px solid #06b6d4',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#ecfeff' }}
+                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}
+                >
+                  <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                  </svg>
+                  New File
+                </button>
+                )}
+                {canWriteFile && (
+                <button
                   onClick={() => setShowUploadModal(true)}
                   style={{
                     padding: '6px 12px',
@@ -1180,6 +1231,50 @@ async function handleDeleteFolder(folderPath: string) {
               >
                 Create Folder
               </button>
+            </div>
+          </div>
+        </div>
+  )}
+
+      {/* Create File Modal */}
+      {showCreateFileModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1100,
+          padding: '20px'
+        }} onClick={() => { setShowCreateFileModal(false); setNewFileName(''); setNewFileContent(''); }}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            maxWidth: '700px',
+            width: '100%',
+            padding: '24px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+          }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+              <h2 style={{ fontSize: '20px', fontWeight: 600, color: '#111827', margin: 0 }}>Create New File</h2>
+              <button onClick={() => { setShowCreateFileModal(false); setNewFileName(''); setNewFileContent(''); }} style={{ background: 'none', border: 'none', fontSize: '24px', color: '#6b7280', cursor: 'pointer', padding: '4px 8px' }}>×</button>
+            </div>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, color: '#374151', marginBottom: '8px' }}>File Name</label>
+              <input type="text" placeholder="Enter file name (e.g., file.txt)" value={newFileName} onChange={e => setNewFileName(e.target.value)} style={{ width: '100%', padding: '10px 12px', fontSize: '14px', border: '1px solid #d1d5db', borderRadius: '6px', outline: 'none', boxSizing: 'border-box' }} onFocus={(e) => e.currentTarget.style.borderColor = '#4f46e5'} onBlur={(e) => e.currentTarget.style.borderColor = '#d1d5db'} autoFocus />
+              <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '8px' }}>File will be created in: <strong>{selectedBucket || 'Select a bucket'}</strong> / <strong>{prefix || 'root'}</strong></p>
+            </div>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, color: '#374151', marginBottom: '8px' }}>Initial Content (optional)</label>
+              <textarea value={newFileContent} onChange={e => setNewFileContent(e.target.value)} style={{ width: '100%', minHeight: '160px', fontSize: '14px', border: '1px solid #d1d5db', borderRadius: '6px' }} />
+            </div>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button onClick={() => { setShowCreateFileModal(false); setNewFileName(''); setNewFileContent(''); }} style={{ padding: '10px 20px', fontSize: '14px', fontWeight: 500, color: '#374151', backgroundColor: 'transparent', border: '1px solid #d1d5db', borderRadius: '6px', cursor: 'pointer' }}>Cancel</button>
+              <button onClick={handleCreateFile} disabled={!newFileName.trim() || !selectedBucket} style={{ padding: '10px 20px', fontSize: '14px', fontWeight: 500, color: 'white', backgroundColor: !newFileName.trim() || !selectedBucket ? '#9ca3af' : '#4f46e5', border: 'none', borderRadius: '6px', cursor: !newFileName.trim() || !selectedBucket ? 'not-allowed' : 'pointer' }}>{'Create File'}</button>
             </div>
           </div>
         </div>
