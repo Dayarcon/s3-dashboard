@@ -61,7 +61,23 @@ export function axiosWithAuth() {
   // Request interceptor - check token expiration before sending request
   instance.interceptors.request.use(cfg => {
     const tk = getToken();
-    
+
+    // If the user is required to change password, redirect to the change-password page and cancel requests
+    try {
+      const u = typeof window !== 'undefined' ? localStorage.getItem('s3dash_user') : null;
+      if (u) {
+        const parsed = JSON.parse(u) as any;
+        if (parsed?.must_change_password) {
+          if (typeof window !== 'undefined' && window.location.pathname !== '/change-password') {
+            window.location.href = '/change-password';
+          }
+          return Promise.reject(new Error('must_change_password'));
+        }
+      }
+    } catch (e) {
+      // ignore parse errors
+    }
+
     // Check if token is expired before making the request
     if (isTokenExpired(tk)) {
       logout();
@@ -71,7 +87,7 @@ export function axiosWithAuth() {
       // Cancel the request
       return Promise.reject(new Error('Token expired'));
     }
-    
+
     if (tk) {
       cfg.headers.Authorization = `Bearer ${tk}`;
     }

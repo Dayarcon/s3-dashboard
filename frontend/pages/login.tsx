@@ -19,7 +19,12 @@ export default function LoginPage(){
       const token = res.data.token;
       localStorage.setItem('s3dash_token', token);
       localStorage.setItem('s3dash_user', JSON.stringify(res.data.user));
-      Router.push('/');
+      // If user must change password, redirect to change-password flow
+      if (res.data.user?.must_change_password) {
+        Router.push('/change-password');
+      } else {
+        Router.push('/');
+      }
     } catch (e: any) {
       console.error(e);
       setErr(e?.response?.data?.error || 'Login failed. Please check your credentials.');
