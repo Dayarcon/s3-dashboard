@@ -10,7 +10,7 @@ import { listBuckets, listAtPrefix, getObjectContent, putObjectContent, deleteOb
   getObjectMetadata,
   createFolder  } from './s3';
 import authRoutes from './auth';
-import { ensureSuperAdminFromEnv, getAllowedBucketsForUser } from './db';
+import { ensureSuperAdminFromEnv, getAllowedBucketsForUser, insertAudit } from './db';
 import { authMiddleware, AuthRequest } from './middleware/authMiddleware';
 import groupRoutes from './groups';
 import { permissionMiddleware } from './middleware/permissionMiddleware';
@@ -118,6 +118,7 @@ app.get('/api/list', authMiddleware, async (req, res) => {
     // ensure the requesting user is allowed to view this bucket
     if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     const data = await listAtPrefix(bucket, prefix);
+    try { insertAudit((req as AuthRequest).user?.sub || null, 'list', `bucket:${bucket}`, { prefix }); } catch (e) {}
     res.json(data);
   } catch (err) { console.error(err); res.status(500).json({ error: 'list_failed' }); }
 });
@@ -129,6 +130,7 @@ app.get('/api/file', authMiddleware, async (req, res) => {
     if (!bucket || !key) return res.status(400).json({ error: 'missing_params' });
     if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     const content = await getObjectContent(bucket, key);
+    try { insertAudit((req as AuthRequest).user?.sub || null, 'get_file', `bucket:${bucket}`, { key }); } catch (e) {}
     res.send(content);
   } catch (err) { console.error(err); res.status(500).json({ error: 'get_failed' }); }
 });
@@ -139,6 +141,7 @@ app.put('/api/file', authMiddleware, permissionMiddleware('file', 'write'), asyn
     if (!bucket || !key) return res.status(400).json({ error: 'missing_params' });
     if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     await putObjectContent(bucket, key, content);
+    try { insertAudit((req as AuthRequest).user?.sub || null, 'put_file', `bucket:${bucket}`, { key }); } catch (e) {}
     res.json({ ok: true });
   } catch (err) { console.error(err); res.status(500).json({ error: 'put_failed' }); }
 });
@@ -149,6 +152,7 @@ app.delete('/api/file', authMiddleware, permissionMiddleware('file', 'write'), a
     if (!bucket || !key) return res.status(400).json({ error: 'missing_params' });
     if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     await deleteObject(bucket, key);
+    try { insertAudit((req as AuthRequest).user?.sub || null, 'delete_file', `bucket:${bucket}`, { key }); } catch (e) {}
     res.json({ ok: true });
   } catch (err: any) {
     console.error(err);
@@ -165,6 +169,7 @@ app.post('/api/files/delete', authMiddleware, permissionMiddleware('file', 'writ
     }
     if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     const result = await deleteObjects(bucket, keys);
+    try { insertAudit((req as AuthRequest).user?.sub || null, 'bulk_delete', `bucket:${bucket}`, { keys }); } catch (e) {}
     res.json(result);
   } catch (err: any) {
     console.error(err);
@@ -181,6 +186,7 @@ app.post('/api/file/copy', authMiddleware, permissionMiddleware('file', 'write')
     }
     if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     await copyObject(bucket, sourceKey, destKey);
+    try { insertAudit((req as AuthRequest).user?.sub || null, 'copy_file', `bucket:${bucket}`, { sourceKey, destKey }); } catch (e) {}
     res.json({ ok: true });
   } catch (err: any) {
     console.error(err);
@@ -197,6 +203,7 @@ app.post('/api/file/move', authMiddleware, permissionMiddleware('file', 'write')
     }
     if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     await moveObject(bucket, sourceKey, destKey);
+    try { insertAudit((req as AuthRequest).user?.sub || null, 'move_file', `bucket:${bucket}`, { sourceKey, destKey }); } catch (e) {}
     res.json({ ok: true });
   } catch (err: any) {
     console.error(err);
@@ -212,6 +219,7 @@ app.get('/api/file/info', authMiddleware, async (req, res) => {
     if (!bucket || !key) return res.status(400).json({ error: 'missing_params' });
     if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
     const metadata = await getObjectMetadata(bucket, key);
+    try { insertAudit((req as AuthRequest).user?.sub || null, 'file_info', `bucket:${bucket}`, { key }); } catch (e) {}
     res.json(metadata);
   } catch (err: any) {
     console.error(err);
@@ -260,6 +268,7 @@ app.post('/api/folder/create',
       }
       if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
       await createFolder(bucket, folderPath);
+      try { insertAudit((req as AuthRequest).user?.sub || null, 'create_folder', `bucket:${bucket}`, { folderPath }); } catch (e) {}
       res.json({ ok: true, folderPath });
     } catch (err: any) {
       console.error(err);

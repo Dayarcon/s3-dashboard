@@ -1,6 +1,5 @@
 import express from 'express';
-import { db } from './db';
-import { createUser } from './db';
+import { db, createUser, insertAudit } from './db';
 import bcrypt from 'bcrypt';
 import { authMiddleware, AuthRequest } from './middleware/authMiddleware';
 
@@ -59,6 +58,7 @@ router.get('/', authMiddleware, (req: AuthRequest, res) => {
         }
       }
   
+      try { insertAudit(req.user?.sub || null, 'list_users', 'users', {}); } catch (e) {}
       res.json(Object.values(usersMap));
     } catch (err: any) {
       res.status(500).json({ error: 'failed_to_list_users', detail: err.message });
@@ -103,10 +103,11 @@ router.get('/:userId', authMiddleware, (req: AuthRequest, res) => {
             };
         });
 
-        res.json({
-            ...user,
-            groups: groupsWithPermissions
-        });
+    try { insertAudit(req.user?.sub || null, 'view_user', `user:${userId}`, {}); } catch (e) {}
+    res.json({
+      ...user,
+      groups: groupsWithPermissions
+    });
     } catch (err: any) {
         res.status(500).json({ error: 'failed_to_get_user_details', detail: err.message });
     }
@@ -129,8 +130,9 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
         }
         
         const hash = await bcrypt.hash(password, 10);
-        const id = createUser(username, hash, role || 'user');
-        res.json({ id, username, role: role || 'user' });
+    const id = createUser(username, hash, role || 'user');
+    try { insertAudit(req.user?.sub || null, 'create_user', `user:${id}`, { username, role: role || 'user' }); } catch (e) {}
+    res.json({ id, username, role: role || 'user' });
     } catch (err: any) {
         res.status(500).json({ error: 'user_creation_failed', detail: err.message });
     }
@@ -178,7 +180,7 @@ router.delete('/:userId', authMiddleware, (req: AuthRequest, res) => {
     });
 
     tx();
-
+    try { insertAudit(req.user?.sub || null, 'delete_user', `user:${userId}`, {}); } catch (e) {}
     res.json({
       ok: true,
       message: 'user_deleted',
@@ -231,7 +233,7 @@ router.put('/:userId', authMiddleware, async (req: AuthRequest, res) => {
     values.push(userId);
     const sql = `UPDATE users SET ${updates.join(', ')} WHERE id = ?`;
     db.prepare(sql).run(...values);
-
+    try { insertAudit(req.user?.sub || null, 'update_user', `user:${userId}`, { updates: Object.keys(req.body) }); } catch (e) {}
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: 'update_failed', detail: err.message });
@@ -264,8 +266,7 @@ router.post('/:userId/reset-password', authMiddleware, async (req: AuthRequest, 
   const hash = await bcrypt.hash(passwordToStore, 10);
   const setMustChange = (generatedTemp ? true : !!must_change) ? 1 : 0;
   db.prepare('UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?').run(hash, setMustChange, userId);
-
-    // Optionally insert an audit log (if you have auditing). For now, return success and temp password if generated.
+  try { insertAudit(req.user?.sub || null, 'reset_password', `user:${userId}`, { generatedTemp: !!generatedTemp, must_change: !!setMustChange }); } catch (e) {}
     const resp: any = { ok: true };
     if (generatedTemp) resp.tempPassword = generatedTemp;
     res.json(resp);
@@ -290,6 +291,7 @@ router.patch('/:userId/status', authMiddleware, (req: AuthRequest, res) => {
 
   try {
     db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(is_active ? 1 : 0, userId);
+    try { insertAudit(req.user?.sub || null, 'set_user_active', `user:${userId}`, { is_active }); } catch (e) {}
     res.json({ ok: true, is_active });
   } catch (err: any) {
     res.status(500).json({ error: 'status_update_failed', detail: err.message });

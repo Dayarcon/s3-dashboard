@@ -67,7 +67,20 @@ router.get('/', authMiddleware, (req: AuthRequest, res) => {
 
   const total = (db.prepare(countSql).get(...countParams) as {total: number } | undefined)?.total || 0;
 
-  res.json({ logs, total, limit, offset });
+  // Parse details JSON for client convenience
+  const parsed = (logs || []).map((l: any) => ({
+    id: l.id,
+    user_id: l.user_id,
+    username: l.username,
+    action: l.action,
+    resource: l.resource,
+    details: (() => {
+      try { return l.details ? JSON.parse(l.details) : null; } catch (e) { return l.details; }
+    })(),
+    created_at: l.created_at
+  }));
+
+  res.json({ logs: parsed, total, limit, offset });
 });
 
 export default router;

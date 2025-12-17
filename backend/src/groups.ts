@@ -1,5 +1,5 @@
 import express from 'express';
-import { db } from './db';
+import { db, insertAudit } from './db';
 import { authMiddleware, AuthRequest } from './middleware/authMiddleware';
 
 const router = express.Router();
@@ -33,7 +33,7 @@ router.post('/', authMiddleware, (req: AuthRequest, res) => {
   const info = db.prepare(
     `INSERT INTO groups (name) VALUES (?)`
   ).run(name);
-
+  try { insertAudit(req.user?.sub || null, 'create_group', `group:${name}`, { groupId: info.lastInsertRowid }); } catch (e) {}
   res.json({ id: info.lastInsertRowid, name });
 });
 
@@ -46,7 +46,7 @@ router.get('/', authMiddleware, (req: AuthRequest, res) => {
   const groups = db.prepare(
     `SELECT id, name, created_at FROM groups ORDER BY created_at DESC`
   ).all();
-
+  try { insertAudit(req.user?.sub || null, 'list_groups', 'groups', {}); } catch (e) {}
   res.json(groups);
 });
 
@@ -81,6 +81,7 @@ router.get('/:id', authMiddleware, (req: AuthRequest, res) => {
     SELECT id, bucket_name FROM group_buckets WHERE group_id = ?
   `).all(groupId) as Array<{ id: number; bucket_name: string }>;
 
+  try { insertAudit(req.user?.sub || null, 'view_group', `group:${groupId}`, {}); } catch (e) {}
   res.json({ group, users, permissions, buckets });
 });
 
@@ -97,21 +98,17 @@ router.post('/:groupId/permissions', authMiddleware, (req: AuthRequest, res) => 
     return res.status(400).json({ error: 'resource_and_access_required' });
   }
 
-  const exists = db.prepare(`
-    SELECT id FROM permissions
-    WHERE group_id=? AND resource=? AND access=?
-  `).get(groupId, resource, access);
-
+  const exists = db.prepare(`SELECT id FROM permissions WHERE group_id=? AND resource=?`).get(groupId, resource) as any;
   if (exists) {
-    return res.status(409).json({ error: 'permission_already_exists' });
+    // update access if different
+    db.prepare(`UPDATE permissions SET access = ? WHERE id = ?`).run(access, exists.id);
+    try { insertAudit(req.user?.sub || null, 'update_permission', `group:${groupId}`, { permissionId: exists.id, resource, access }); } catch (e) {}
+    return res.json({ ok: true, updated: true, id: exists.id });
   }
 
-  db.prepare(`
-    INSERT INTO permissions (group_id, resource, access)
-    VALUES (?, ?, ?)
-  `).run(groupId, resource, access);
-
-  res.json({ ok: true });
+  const info = db.prepare(`INSERT INTO permissions (group_id, resource, access) VALUES (?, ?, ?)`).run(groupId, resource, access);
+  try { insertAudit(req.user?.sub || null, 'add_permission', `group:${groupId}`, { permissionId: info.lastInsertRowid, resource, access }); } catch (e) {}
+  res.json({ ok: true, id: info.lastInsertRowid });
 });
 
 /* ---------------------------------------------------
@@ -126,7 +123,8 @@ router.post('/:groupId/buckets', authMiddleware, (req: AuthRequest, res) => {
   const exists = db.prepare(`SELECT id FROM group_buckets WHERE group_id = ? AND bucket_name = ?`).get(groupId, bucket_name);
   if (exists) return res.status(409).json({ error: 'bucket_already_assigned' });
 
-  db.prepare(`INSERT INTO group_buckets (group_id, bucket_name) VALUES (?, ?)`).run(groupId, bucket_name);
+  const info = db.prepare(`INSERT INTO group_buckets (group_id, bucket_name) VALUES (?, ?)`).run(groupId, bucket_name);
+  try { insertAudit(req.user?.sub || null, 'assign_bucket', `group:${groupId}`, { bucket: bucket_name, id: info.lastInsertRowid }); } catch (e) {}
   res.json({ ok: true });
 });
 
@@ -137,6 +135,7 @@ router.get('/:groupId/buckets', authMiddleware, (req: AuthRequest, res) => {
   if (!requireAdmin(req, res)) return;
   const groupId = Number(req.params.groupId);
   const rows = db.prepare(`SELECT id, bucket_name FROM group_buckets WHERE group_id = ?`).all(groupId);
+  try { insertAudit(req.user?.sub || null, 'list_group_buckets', `group:${groupId}`, {}); } catch (e) {}
   res.json(rows.map((r: any) => ({ id: r.id, bucket_name: r.bucket_name })));
 });
 
@@ -149,7 +148,8 @@ router.delete('/:groupId/buckets/:bucketName', authMiddleware, (req: AuthRequest
   const bucketName = decodeURIComponent(String(req.params.bucketName || ''));
   if (!bucketName) return res.status(400).json({ error: 'bucket_name_required' });
 
-  db.prepare(`DELETE FROM group_buckets WHERE group_id = ? AND bucket_name = ?`).run(groupId, bucketName);
+  const info = db.prepare(`DELETE FROM group_buckets WHERE group_id = ? AND bucket_name = ?`).run(groupId, bucketName);
+  try { insertAudit(req.user?.sub || null, 'remove_bucket', `group:${groupId}`, { bucket: bucketName, changes: info.changes }); } catch (e) {}
   res.json({ ok: true });
 });
 
@@ -163,11 +163,8 @@ router.delete(
     if (!requireAdmin(req, res)) return;
 
     const permissionId = Number(req.params.permissionId);
-
-    db.prepare(
-      `DELETE FROM permissions WHERE id=?`
-    ).run(permissionId);
-
+    db.prepare(`DELETE FROM permissions WHERE id=?`).run(permissionId);
+    try { insertAudit(req.user?.sub || null, 'remove_permission', `group:${req.params.groupId}`, { permissionId }); } catch (e) {}
     res.json({ ok: true });
   }
 );
@@ -195,11 +192,8 @@ router.post(
       return res.status(409).json({ error: 'user_already_in_group' });
     }
 
-    db.prepare(`
-      INSERT INTO user_groups (user_id, group_id)
-      VALUES (?, ?)
-    `).run(userId, groupId);
-
+    db.prepare(`INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)`).run(userId, groupId);
+    try { insertAudit(req.user?.sub || null, 'assign_user_to_group', `group:${groupId}`, { userId }); } catch (e) {}
     res.json({ ok: true });
   }
 );
@@ -215,11 +209,8 @@ router.delete(
 
     const { groupId, userId } = req.params;
 
-    db.prepare(`
-      DELETE FROM user_groups
-      WHERE group_id=? AND user_id=?
-    `).run(groupId, userId);
-
+    const info = db.prepare(`DELETE FROM user_groups WHERE group_id=? AND user_id=?`).run(groupId, userId);
+    try { insertAudit(req.user?.sub || null, 'remove_user_from_group', `group:${groupId}`, { userId, changes: info.changes }); } catch (e) {}
     res.json({ ok: true });
   }
 );
@@ -249,7 +240,7 @@ router.delete('/:id', authMiddleware, (req: AuthRequest, res) => {
   });
 
   tx();
-
+  try { insertAudit(req.user?.sub || null, 'delete_group', `group:${groupId}`, {}); } catch (e) {}
   res.json({ ok: true });
 });
 

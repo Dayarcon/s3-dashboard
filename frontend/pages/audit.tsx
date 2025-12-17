@@ -232,12 +232,16 @@ export default function AuditPage() {
                   <td style={{ padding: '12px', fontSize: '14px' }}>
                     {log.details ? (() => {
                       try {
-                        const parsed = JSON.parse(log.details);
-                        return Object.entries(parsed).map(([key, value]) => 
-                          <div key={key}><strong>{key}:</strong> {String(value)}</div>
-                        );
+                        // details may already be an object (backend now parses it) or a JSON string
+                        const parsed = typeof log.details === 'string' ? JSON.parse(log.details) : log.details;
+                        if (parsed && typeof parsed === 'object') {
+                          return Object.entries(parsed).map(([key, value]) => (
+                            <div key={key}><strong>{key}:</strong> {String(value)}</div>
+                          ));
+                        }
+                        return String(parsed);
                       } catch {
-                        return log.details;
+                        return String(log.details);
                       }
                     })() : '-'}
                   </td>
