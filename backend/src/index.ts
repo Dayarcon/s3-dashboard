@@ -155,16 +155,98 @@ app.get('/api/list', authMiddleware, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'list_failed' }); }
 });
 
+// Get file - now supports streaming for all file types (images, videos, pdf, etc.)
 app.get('/api/file', authMiddleware, async (req, res) => {
   try {
     const bucket = String(req.query.bucket || '');
     const key = String(req.query.key || '');
     if (!bucket || !key) return res.status(400).json({ error: 'missing_params' });
     if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
-    const content = await getObjectContent(bucket, key);
+
+    const bucketRegion = await getBucketLocation(bucket);
+    const s3Client = getClientForRegion(bucketRegion);
+
+    // Get object metadata first
+    const { HeadObjectCommand } = await import('@aws-sdk/client-s3');
+    const headCmd = new HeadObjectCommand({ Bucket: bucket, Key: key });
+    const headRes = await s3Client.send(headCmd);
+
+    const contentType = headRes.ContentType || 'application/octet-stream';
+    const contentLength = headRes.ContentLength || 0;
+
+    // Set appropriate headers for streaming
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Length', contentLength.toString());
+    res.setHeader('Content-Disposition', `inline; filename="${key.split('/').pop()}"`);
+
+    // Stream the file with optional Range support
+    const rangeHeader = req.headers.range as string | undefined;
+    const getObjectParams: any = { Bucket: bucket, Key: key };
+    if (rangeHeader) {
+      getObjectParams.Range = rangeHeader;
+    }
+    const { GetObjectCommand } = await import('@aws-sdk/client-s3');
+    const cmd = new GetObjectCommand(getObjectParams);
+    const response = await s3Client.send(cmd);
+
+    // Set status and headers for partial content if range requested
+    if (rangeHeader) {
+      res.status(206);
+      const metadata: any = response.$metadata;
+      const contentRange = (response as any).ContentRange || metadata?.httpHeaders?.['content-range'];
+      if (contentRange) {
+        res.setHeader('Content-Range', contentRange);
+      }
+    }
+
+    // Stream the body to response
+    if (response.Body) {
+      const stream = response.Body as any;
+      for await (const chunk of stream) {
+        res.write(chunk);
+      }
+      res.end();
+    }
+
     try { insertAudit((req as AuthRequest).user?.sub || null, 'get_file', `bucket:${bucket}`, { key }); } catch (e) {}
-    res.send(content);
-  } catch (err) { console.error(err); res.status(500).json({ error: 'get_failed' }); }
+  } catch (err: any) {
+    console.error(err);
+    res.status(500).json({ error: 'get_failed', detail: err.message });
+  }
+});
+
+// Get file download URL (for direct download)
+app.get('/api/file/download', authMiddleware, async (req, res) => {
+  try {
+    const bucket = String(req.query.bucket || '');
+    const key = String(req.query.key || '');
+    if (!bucket || !key) return res.status(400).json({ error: 'missing_params' });
+    if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
+
+    const bucketRegion = await getBucketLocation(bucket);
+    const s3Client = getClientForRegion(bucketRegion);
+
+    const { GetObjectCommand } = await import('@aws-sdk/client-s3');
+    const cmd = new GetObjectCommand({ Bucket: bucket, Key: key });
+    const response = await s3Client.send(cmd);
+
+    const contentType = response.ContentType || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${key.split('/').pop()}"`);
+
+    if (response.Body) {
+      const stream = response.Body as any;
+      for await (const chunk of stream) {
+        res.write(chunk);
+      }
+      res.end();
+    }
+
+    try { insertAudit((req as AuthRequest).user?.sub || null, 'download_file', `bucket:${bucket}`, { key }); } catch (e) {}
+  } catch (err: any) {
+    console.error(err);
+    res.status(500).json({ error: 'download_failed', detail: err.message });
+  }
 });
 
 app.put('/api/file', authMiddleware, permissionMiddleware('file', 'write'), async (req, res) => {
@@ -312,8 +394,8 @@ app.post('/api/folder/create',
 );
 
 // Delete folder endpoint
-app.delete('/api/folder', 
-  authMiddleware, 
+app.delete('/api/folder',
+  authMiddleware,
   permissionMiddleware('folder', 'write'),
   async (req, res) => {
     try {
@@ -332,6 +414,194 @@ app.delete('/api/folder',
     }
   }
 );
+
+// In-memory store for upload progress (in production, use Redis)
+const uploadProgressStore = new Map<string, {
+  progress: number;
+  uploadedBytes: number;
+  totalBytes: number;
+  status: 'pending' | 'uploading' | 'completed' | 'error';
+  uploadId?: string;
+  parts?: any[];
+}>();
+
+// Initiate multipart upload
+app.post('/api/upload/initiate', authMiddleware, async (req, res) => {
+  try {
+    const { bucket, key, contentType, fileSize } = req.body;
+    if (!bucket || !key) return res.status(400).json({ error: 'missing_params' });
+    if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
+
+    const bucketRegion = await getBucketLocation(bucket);
+    const s3Client = getClientForRegion(bucketRegion);
+
+    const { CreateMultipartUploadCommand } = await import('@aws-sdk/client-s3');
+    const cmd = new CreateMultipartUploadCommand({
+      Bucket: bucket,
+      Key: key,
+      ContentType: contentType || 'application/octet-stream'
+    });
+    const response = await s3Client.send(cmd);
+
+    const uploadId = response.UploadId!;
+    const progressKey = `${bucket}:${key}:${uploadId}`;
+
+    uploadProgressStore.set(progressKey, {
+      progress: 0,
+      uploadedBytes: 0,
+      totalBytes: fileSize || 0,
+      status: 'pending',
+      uploadId,
+      parts: []
+    });
+
+    res.json({ ok: true, uploadId, key, bucket });
+  } catch (err: any) {
+    console.error(err);
+    res.status(500).json({ error: 'initiate_upload_failed', detail: err.message });
+  }
+});
+
+// Upload a single part
+app.post('/api/upload/part', authMiddleware, async (req, res) => {
+  try {
+    const { bucket, key, uploadId, partNumber, data } = req.body;
+    if (!bucket || !key || !uploadId || !partNumber || !data) {
+      return res.status(400).json({ error: 'missing_params' });
+    }
+    if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
+
+    const bucketRegion = await getBucketLocation(bucket);
+    const s3Client = getClientForRegion(bucketRegion);
+
+    const { UploadPartCommand } = await import('@aws-sdk/client-s3');
+    const partBuffer = Buffer.from(data, 'base64');
+    const cmd = new UploadPartCommand({
+      Bucket: bucket,
+      Key: key,
+      UploadId: uploadId,
+      PartNumber: partNumber,
+      Body: partBuffer
+    });
+    const response = await s3Client.send(cmd);
+
+    const progressKey = `${bucket}:${key}:${uploadId}`;
+    const progress = uploadProgressStore.get(progressKey);
+    if (progress) {
+      progress.parts = progress.parts || [];
+      progress.parts.push({ PartNumber: partNumber, ETag: response.ETag });
+      // Update progress metrics
+      const partSize = partBuffer.byteLength;
+      progress.uploadedBytes = (progress.uploadedBytes || 0) + partSize;
+      if (progress.totalBytes && progress.totalBytes > 0) {
+        const pct = Math.round((progress.uploadedBytes / progress.totalBytes) * 100);
+        progress.progress = Math.min(100, Math.max(0, pct));
+      } else {
+        progress.progress = 0;
+      }
+      progress.status = 'uploading';
+      uploadProgressStore.set(progressKey, progress);
+    }
+
+    res.json({ ok: true, partNumber, etag: response.ETag });
+  } catch (err: any) {
+    console.error(err);
+    res.status(500).json({ error: 'upload_part_failed', detail: err.message });
+  }
+});
+
+// Complete multipart upload
+app.post('/api/upload/complete', authMiddleware, async (req, res) => {
+  try {
+    const { bucket, key, uploadId, parts } = req.body;
+    if (!bucket || !key || !uploadId || !parts) {
+      return res.status(400).json({ error: 'missing_params' });
+    }
+    if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
+
+    const bucketRegion = await getBucketLocation(bucket);
+    const s3Client = getClientForRegion(bucketRegion);
+
+    const { CompleteMultipartUploadCommand } = await import('@aws-sdk/client-s3');
+    const cmd = new CompleteMultipartUploadCommand({
+      Bucket: bucket,
+      Key: key,
+      UploadId: uploadId,
+      MultipartUpload: { Parts: parts.sort((a: any, b: any) => a.PartNumber - b.PartNumber) }
+    });
+    await s3Client.send(cmd);
+
+    const progressKey = `${bucket}:${key}:${uploadId}`;
+    uploadProgressStore.set(progressKey, {
+      progress: 100,
+      uploadedBytes: 0,
+      totalBytes: 0,
+      status: 'completed'
+    });
+
+    // Clean up after 30 seconds
+    setTimeout(() => uploadProgressStore.delete(progressKey), 30000);
+
+    try { insertAudit((req as AuthRequest).user?.sub || null, 'upload_file', `bucket:${bucket}`, { key }); } catch (e) {}
+    res.json({ ok: true, key });
+  } catch (err: any) {
+    console.error(err);
+    res.status(500).json({ error: 'complete_upload_failed', detail: err.message });
+  }
+});
+
+// Abort multipart upload
+app.post('/api/upload/abort', authMiddleware, async (req, res) => {
+  try {
+    const { bucket, key, uploadId } = req.body;
+    if (!bucket || !key || !uploadId) {
+      return res.status(400).json({ error: 'missing_params' });
+    }
+
+    const bucketRegion = await getBucketLocation(bucket);
+    const s3Client = getClientForRegion(bucketRegion);
+
+    const { AbortMultipartUploadCommand } = await import('@aws-sdk/client-s3');
+    const cmd = new AbortMultipartUploadCommand({
+      Bucket: bucket,
+      Key: key,
+      UploadId: uploadId
+    });
+    await s3Client.send(cmd);
+
+    const progressKey = `${bucket}:${key}:${uploadId}`;
+    uploadProgressStore.delete(progressKey);
+
+    res.json({ ok: true });
+  } catch (err: any) {
+    console.error(err);
+    res.status(500).json({ error: 'abort_upload_failed', detail: err.message });
+  }
+});
+
+// Get upload progress
+app.get('/api/upload/progress/:uploadId', authMiddleware, async (req, res) => {
+  try {
+    const { uploadId } = req.params;
+    const { bucket, key } = req.query;
+
+    if (!bucket || !key) {
+      return res.status(400).json({ error: 'missing_params' });
+    }
+
+    const progressKey = `${bucket}:${key}:${uploadId}`;
+    const progress = uploadProgressStore.get(progressKey);
+
+    if (!progress) {
+      return res.status(404).json({ error: 'upload_not_found' });
+    }
+
+    res.json(progress);
+  } catch (err: any) {
+    console.error(err);
+    res.status(500).json({ error: 'get_progress_failed', detail: err.message });
+  }
+});
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`Backend listening on ${PORT}`));

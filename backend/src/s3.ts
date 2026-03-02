@@ -250,14 +250,26 @@ export async function getAllBucketsWithMetrics() {
         location
       });
     } catch (err: any) {
-      // Skip buckets we can't access
+      const errorCode = err?.Code || err?.code || err?.name || 'UnknownError';
+      const errorMessage = err?.message || 'Failed to get metrics';
+
+      // Log the error for debugging
+      if (errorCode === 'NoSuchBucket' || errorCode === 'ENOTFOUND' || errorCode === 'NetworkError') {
+        console.warn(`Bucket '${bucket.name}' not found or inaccessible, skipping: ${errorMessage}`);
+      } else if (errorCode === 'AccessDenied') {
+        console.warn(`Access denied to bucket '${bucket.name}', skipping: ${errorMessage}`);
+      } else {
+        console.warn(`Failed to get metrics for bucket '${bucket.name}': ${errorMessage}`);
+      }
+
+      // Include the bucket in results with error info (so UI can show it)
       metrics.push({
         ...bucket,
         totalSize: 0,
         objectCount: 0,
         sizeFormatted: '0 B',
         location: 'unknown',
-        error: err.message
+        error: errorMessage
       });
     }
   }

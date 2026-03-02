@@ -3,7 +3,9 @@ import { listBuckets, listRegions, listPrefix, getFile, putFile } from '../lib/s
 import Router from 'next/router';
 import { getToken, getUser, logout, checkTokenAndLogout, fetchMe } from '../lib/auth';
 import Link from 'next/link';
-import { deleteFile, deleteFiles, copyFile, moveFile, uploadFile, getFileMetadata, createFolder, deleteFolder } from '../lib/s3api';
+import { deleteFile, deleteFiles, copyFile, moveFile, getFileMetadata, createFolder, deleteFolder } from '../lib/s3api';
+import UploadWithProgress from '../components/UploadWithProgress';
+import FilePreviewModal from '../components/FilePreviewModal';
 export default function Explorer(){
   const [buckets, setBuckets] = useState<any[]>([])
   const [selectedBucket, setSelectedBucket] = useState('')
@@ -25,6 +27,7 @@ export default function Explorer(){
   const [showRegionDropdown, setShowRegionDropdown] = useState(false);
   const [regionSearchQuery, setRegionSearchQuery] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+  const [previewFile, setPreviewFile] = useState<{ key: string; name?: string } | null>(null);
 const [showUploadModal, setShowUploadModal] = useState(false);
 const [showDeleteModal, setShowDeleteModal] = useState(false);
 const [showMoveModal, setShowMoveModal] = useState(false);
@@ -170,7 +173,20 @@ const [newFileContent, setNewFileContent] = useState('');
     setSelectedFile(null)
   }
 
+  function isTextLikeFile(key: string) {
+    const ext = key.split('.').pop()?.toLowerCase() || '';
+    const textExts = ['txt', 'md', 'log', 'csv'];
+    const codeExts = ['js', 'ts', 'jsx', 'tsx', 'py', 'java', 'c', 'cpp', 'go', 'rs', 'rb', 'php', 'html', 'css', 'json', 'xml', 'yaml', 'yml'];
+    return textExts.includes(ext) || codeExts.includes(ext);
+  }
+
   async function openFile(file:any){
+    // For text/code-like files, load into editor; for others, open preview modal instead.
+    if (!isTextLikeFile(file.key)) {
+      setPreviewFile({ key: file.key, name: getFileName(file.key) });
+      return;
+    }
+
     setLoading(true)
     setSelectedFile(file)
     setError(null)
@@ -289,19 +305,6 @@ async function handleRenameFile(oldKey: string, newKey: string) {
     }
   } catch (err: any) {
     setError(err.response?.data?.error || 'Failed to rename file');
-  }
-}
-
-// Upload file
-async function handleUploadFile(file: File) {
-  if (!selectedBucket) return;
-  const key = prefix ? `${prefix}${file.name}` : file.name;
-  try {
-    await uploadFile(selectedBucket, key, file);
-    setSaveMessage('File uploaded successfully!');
-    load(prefix);
-  } catch (err: any) {
-    setError(err.response?.data?.error || 'Failed to upload file');
   }
 }
 
@@ -1291,31 +1294,64 @@ async function handleDeleteFolder(folderPath: string) {
         </div>
       </div>
 
-      {/* Upload Modal */}
-      {showUploadModal && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-          padding: '20px'
-        }} onClick={() => setShowUploadModal(false)}>
-          <div style={{
-            backgroundColor: 'white',
-            borderRadius: '12px',
-            maxWidth: '500px',
-            width: '100%',
-            padding: '24px',
-            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
-          }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-              <h2 style={{ fontSize: '20px', fontWeight: 600, color: '#111827', margin: 0 }}>Upload File</h2>
+      {/* Upload Panel Modal */}
+      {showUploadModal && selectedBucket && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+          }}
+          onClick={() => setShowUploadModal(false)}
+        >
+          <div
+            style={{
+              backgroundColor: 'white',
+              borderRadius: '12px',
+              maxWidth: '640px',
+              width: '100%',
+              padding: '24px',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: '16px',
+              }}
+            >
+              <div>
+                <h2
+                  style={{
+                    fontSize: '18px',
+                    fontWeight: 600,
+                    color: '#111827',
+                    margin: 0,
+                  }}
+                >
+                  Upload files
+                </h2>
+                <p
+                  style={{
+                    fontSize: '12px',
+                    color: '#6b7280',
+                    margin: '4px 0 0 0',
+                  }}
+                >
+                  Target: <strong>{selectedBucket}</strong> / <strong>{prefix || 'root'}</strong>
+                </p>
+              </div>
               <button
                 onClick={() => setShowUploadModal(false)}
                 style={{
@@ -1324,33 +1360,19 @@ async function handleDeleteFolder(folderPath: string) {
                   fontSize: '24px',
                   color: '#6b7280',
                   cursor: 'pointer',
-                  padding: '4px 8px'
+                  padding: '4px 8px',
                 }}
               >
                 ×
               </button>
             </div>
-            <input
-              type="file"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file && selectedBucket) {
-                  handleUploadFile(file);
-                  setShowUploadModal(false);
-                }
-              }}
-              style={{
-                width: '100%',
-                padding: '12px',
-                border: '2px dashed #d1d5db',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                fontSize: '14px'
+            <UploadWithProgress
+              bucket={selectedBucket}
+              prefix={prefix}
+              onUploadComplete={() => {
+                load(prefix);
               }}
             />
-            <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '12px', margin: 0 }}>
-              File will be uploaded to: {prefix || 'root'}
-            </p>
           </div>
         </div>
       )}
@@ -1544,6 +1566,13 @@ async function handleDeleteFolder(folderPath: string) {
           to { transform: rotate(360deg); }
         }
       `}</style>
+      {previewFile && selectedBucket && (
+        <FilePreviewModal
+          file={previewFile}
+          bucket={selectedBucket}
+          onClose={() => setPreviewFile(null)}
+        />
+      )}
     </div>
   )
 }
