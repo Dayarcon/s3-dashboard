@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
-import { listBuckets, listAtPrefix, getObjectContent, putObjectContent, deleteObject, 
+import { listBuckets, listBucketsWithRegion, listAtPrefix, getObjectContent, putObjectContent, deleteObject, 
   deleteObjects, 
   copyObject, 
   moveObject, 
@@ -17,8 +17,9 @@ import { permissionMiddleware } from './middleware/permissionMiddleware';
 import userRoutes from './users';
 import multer from 'multer';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
-import { client } from './s3';
+import { defaultClient, getClientForRegion, getBucketLocation } from './s3';
 import auditRoutes from './audit';
+import metricsRoutes from './metrics';
 import { db } from './db';
 
 dotenv.config();
@@ -34,6 +35,7 @@ app.use('/auth', authRoutes);
 app.use('/api/groups', groupRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/metrics', metricsRoutes);
 
 app.get('/api/health', async (req, res) => {
   try {
@@ -56,12 +58,42 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// List unique regions from all accessible buckets
+app.get('/api/regions', authMiddleware, async (req, res) => {
+  try {
+    const buckets = await listBucketsWithRegion();
+    const regions = [...new Set(buckets.map(b => b.region).filter(Boolean))].sort();
+    // Also return all available AWS regions for reference
+    const allAwsRegions = [
+      'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+      'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1', 'eu-central-2', 'eu-north-1', 'eu-south-1', 'eu-south-2',
+      'ap-south-1', 'ap-south-2', 'ap-southeast-1', 'ap-southeast-2', 'ap-southeast-3', 'ap-southeast-4', 'ap-southeast-5',
+      'ap-northeast-1', 'ap-northeast-2', 'ap-northeast-3',
+      'ca-central-1', 'ca-west-1',
+      'sa-east-1',
+      'me-central-1', 'me-south-1',
+      'af-south-1',
+      'il-central-1'
+    ];
+    res.json({ regions, allAwsRegions });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'list_regions_failed' }); }
+});
+
 // Listing buckets: require authentication but allow visibility based on explicit bucket assignments.
 // We avoid requiring the generic 'bucket' permission here so that assigning a bucket to a group/user
 // is enough to make it visible to them.
+// Supports optional ?regions=us-east-1,ap-south-1 query param to filter by regions.
 app.get('/api/buckets', authMiddleware, async (req, res) => {
   try {
-    const buckets = await listBuckets();
+    const buckets = await listBucketsWithRegion();
+
+    // Apply region filter if provided
+    const regionsParam = req.query.regions ? String(req.query.regions) : '';
+    const regionFilter = regionsParam ? regionsParam.split(',').map(r => r.trim()).filter(Boolean) : [];
+    let visible = regionFilter.length > 0
+      ? buckets.filter(b => regionFilter.includes(b.region))
+      : buckets;
+
     // If bucket assignments exist in the system, enforce strict visibility:
     // - if user has allowed buckets -> return only those
     // - if user has no allowed buckets -> return empty list
@@ -71,7 +103,7 @@ app.get('/api/buckets', authMiddleware, async (req, res) => {
       if (userReq.user) {
         // If the user is admin, bypass assignment filtering and return all buckets
         if (userReq.user.role === 'admin') {
-          return res.json(buckets);
+          return res.json(visible);
         }
 
         const allowed = getAllowedBucketsForUser(userReq.user.sub);
@@ -80,7 +112,7 @@ app.get('/api/buckets', authMiddleware, async (req, res) => {
         const totalAssignments = counts ? Number(counts.total || 0) : 0;
 
         if (Array.isArray(allowed) && allowed.length > 0) {
-          const filtered = buckets.filter((b: any) => allowed.includes(b.name));
+          const filtered = visible.filter((b: any) => allowed.includes(b.name));
           return res.json(filtered);
         }
 
@@ -94,7 +126,7 @@ app.get('/api/buckets', authMiddleware, async (req, res) => {
       console.error('failed to filter buckets by assignment', e);
     }
 
-    res.json(buckets);
+    res.json(visible);
   } catch (err) { console.error(err); res.status(500).json({ error: 'list_buckets_failed' }); }
 });
 
@@ -240,13 +272,15 @@ app.post('/api/file/upload',
       if (!bucket || !key) return res.status(400).json({ error: 'missing_params' });
       if (!ensureBucketAllowed(req as AuthRequest, res, bucket)) return;
 
+      const bucketRegion = await getBucketLocation(bucket);
+      const s3Client = getClientForRegion(bucketRegion);
       const cmd = new PutObjectCommand({
         Bucket: bucket,
         Key: key,
         Body: req.file.buffer,
         ContentType: req.file.mimetype
       });
-      await client.send(cmd);
+      await s3Client.send(cmd);
       
       res.json({ ok: true, key, size: req.file.size });
     } catch (err: any) {

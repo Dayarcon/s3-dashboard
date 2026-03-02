@@ -142,3 +142,22 @@ export async function logoutAPI() {
     const res = await api.post(`/api/users/${userId}/reset-password`, body);
     return res.data;
   }
+
+  // Storage Metrics
+export async function getBucketMetrics() {
+    const api = axiosWithAuth();
+    const res = await api.get('/api/metrics/buckets');
+    return res.data;
+  }
+
+  export async function getDetailedBucketMetrics(bucketName: string) {
+    const api = axiosWithAuth();
+    const res = await api.get(`/api/metrics/bucket/${encodeURIComponent(bucketName)}`);
+    return res.data;
+  }
+
+  export async function getStorageSummary() {
+    const api = axiosWithAuth();
+    const res = await api.get('/api/metrics/summary');
+    return res.data;
+  }

@@ -1,8 +1,18 @@
 import { axiosWithAuth } from './auth';
 
-export async function listBuckets() {
+export async function listBuckets(regions?: string[]) {
   const api = axiosWithAuth();
-  const res = await api.get('/api/buckets');
+  const params: any = {};
+  if (regions && regions.length > 0) {
+    params.regions = regions.join(',');
+  }
+  const res = await api.get('/api/buckets', { params });
+  return res.data;
+}
+
+export async function listRegions(): Promise<{ regions: string[]; allAwsRegions: string[] }> {
+  const api = axiosWithAuth();
+  const res = await api.get('/api/regions');
   return res.data;
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { listBuckets, listPrefix, getFile, putFile } from '../lib/s3api'
+import { listBuckets, listRegions, listPrefix, getFile, putFile } from '../lib/s3api'
 import Router from 'next/router';
 import { getToken, getUser, logout, checkTokenAndLogout, fetchMe } from '../lib/auth';
 import Link from 'next/link';
@@ -20,6 +20,10 @@ export default function Explorer(){
   const [user, setUser] = useState<any>(null)
   const [permissions, setPermissions] = useState<Array<{ resource: string, access: string }>>([]);
   const [allowedBuckets, setAllowedBuckets] = useState<string[]>([]);
+  const [regions, setRegions] = useState<string[]>([]);
+  const [selectedRegions, setSelectedRegions] = useState<Set<string>>(new Set());
+  const [showRegionDropdown, setShowRegionDropdown] = useState(false);
+  const [regionSearchQuery, setRegionSearchQuery] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
 const [showUploadModal, setShowUploadModal] = useState(false);
 const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -65,8 +69,41 @@ const [newFileContent, setNewFileContent] = useState('');
     Router.push('/login');
   };
   
+  // Load available regions on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const result = await listRegions();
+        const availableRegions = result.regions || [];
+        setRegions(availableRegions);
+        // Select all available regions by default
+        setSelectedRegions(new Set(availableRegions));
+      } catch (err) {
+        console.error('Failed to load regions:', err);
+      }
+    })();
+  }, []);
+
+  // Close region dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement;
+      if (showRegionDropdown && !target.closest('[data-region-dropdown]')) {
+        setShowRegionDropdown(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showRegionDropdown]);
+
+  // Load buckets whenever selectedRegions changes
   useEffect(()=>{ 
     (async () => {
+      if (regions.length > 0 && selectedRegions.size === 0) {
+        // No regions selected -> show no buckets
+        setBuckets([]);
+        return;
+      }
       setLoading(true)
       setError(null)
       try {
@@ -82,7 +119,9 @@ const [newFileContent, setNewFileContent] = useState('');
           }
         }
 
-        const all = await listBuckets();
+        // Pass selected regions to filter buckets
+        const regionsArr = Array.from(selectedRegions);
+        const all = await listBuckets(regionsArr.length === regions.length ? undefined : regionsArr);
         let visible = all;
         const allowed = me?.allowedBuckets || allowedBuckets;
         if (Array.isArray(allowed) && allowed.length > 0) {
@@ -99,7 +138,7 @@ const [newFileContent, setNewFileContent] = useState('');
         setLoading(false)
       }
     })()
-  },[])
+  },[selectedRegions])
 
   async function load(pfx=''){
     if(!selectedBucket) return
@@ -442,8 +481,58 @@ async function handleDeleteFolder(folderPath: string) {
                     Audit
                   </button>
                 </Link>
+                <Link href="/metrics" style={{ textDecoration: 'none' }}>
+                  <button style={{
+                    padding: '8px 16px',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#6b7280',
+                    backgroundColor: 'transparent',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#f3f4f6';
+                    e.currentTarget.style.borderColor = '#d1d5db';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                    e.currentTarget.style.borderColor = '#e5e7eb';
+                  }}
+                  >
+                    Metrics
+                  </button>
+                </Link>
                 </>
                 )}
+                {!user || user.role !== 'admin' ? (
+                <Link href="/metrics" style={{ textDecoration: 'none' }}>
+                  <button style={{
+                    padding: '8px 16px',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#6b7280',
+                    backgroundColor: 'transparent',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#f3f4f6';
+                    e.currentTarget.style.borderColor = '#d1d5db';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                    e.currentTarget.style.borderColor = '#e5e7eb';
+                  }}
+                  >
+                    Metrics
+                  </button>
+                </Link>
+                ) : null}
               </nav>
             </div>
             
@@ -510,6 +599,176 @@ async function handleDeleteFolder(folderPath: string) {
       <div style={{ display: 'flex', height: 'calc(100vh - 73px)' }}>
         {/* Sidebar */}
         <div style={{ width: '280px', backgroundColor: 'white', borderRight: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column' }}>
+          {/* Region Filter */}
+          {regions.length > 0 && (
+            <div style={{ padding: '16px', borderBottom: '1px solid #e5e7eb' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: '#374151', marginBottom: '8px' }}>
+                Regions
+              </label>
+              <div style={{ position: 'relative' }} data-region-dropdown>
+                <button
+                  onClick={() => setShowRegionDropdown(!showRegionDropdown)}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    fontSize: '14px',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '6px',
+                    backgroundColor: 'white',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    color: '#374151'
+                  }}
+                >
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {selectedRegions.size === 0
+                      ? 'Select regions'
+                      : selectedRegions.size === regions.length
+                        ? 'All regions'
+                        : `${selectedRegions.size} region${selectedRegions.size > 1 ? 's' : ''}`}
+                  </span>
+                  <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: '#9ca3af', flexShrink: 0, transform: showRegionDropdown ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+
+                {showRegionDropdown && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    right: 0,
+                    marginTop: '4px',
+                    backgroundColor: 'white',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '6px',
+                    boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)',
+                    zIndex: 20,
+                    maxHeight: '320px',
+                    display: 'flex',
+                    flexDirection: 'column'
+                  }}>
+                    {/* Search field */}
+                    <div style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>
+                      <input
+                        type="text"
+                        placeholder="Search regions..."
+                        value={regionSearchQuery}
+                        onChange={(e) => setRegionSearchQuery(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                          width: '100%',
+                          padding: '6px 10px',
+                          fontSize: '13px',
+                          border: '1px solid #d1d5db',
+                          borderRadius: '4px',
+                          outline: 'none',
+                          boxSizing: 'border-box'
+                        }}
+                      />
+                    </div>
+
+                    {/* Quick actions */}
+                    <div style={{ display: 'flex', padding: '6px 12px', gap: '8px', borderBottom: '1px solid #e5e7eb' }}>
+                      <button
+                        onClick={() => {
+                          setSelectedRegions(new Set(regions));
+                          setRegionSearchQuery('');
+                        }}
+                        style={{
+                          flex: 1,
+                          padding: '4px 8px',
+                          fontSize: '12px',
+                          fontWeight: 500,
+                          color: '#16a34a',
+                          backgroundColor: '#f0fdf4',
+                          border: '1px solid #86efac',
+                          borderRadius: '4px',
+                          cursor: 'pointer'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#dcfce7'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#f0fdf4'}
+                      >
+                        Select All ({regions.length})
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSelectedRegions(new Set());
+                          setRegionSearchQuery('');
+                        }}
+                        style={{
+                          flex: 1,
+                          padding: '4px 8px',
+                          fontSize: '12px',
+                          fontWeight: 500,
+                          color: '#dc2626',
+                          backgroundColor: '#fef2f2',
+                          border: '1px solid #fca5a5',
+                          borderRadius: '4px',
+                          cursor: 'pointer'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#fee2e2'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#fef2f2'}
+                      >
+                        Deselect All
+                      </button>
+                    </div>
+
+                    {/* Individual region checkboxes */}
+                    <div style={{ overflowY: 'auto', flex: 1 }}>
+                      {regions.filter(r => r.toLowerCase().includes(regionSearchQuery.toLowerCase())).length === 0 ? (
+                        <div style={{ padding: '16px 12px', textAlign: 'center', color: '#6b7280', fontSize: '13px' }}>
+                          No regions found matching "{regionSearchQuery}"
+                        </div>
+                      ) : (
+                        regions
+                          .filter(r => r.toLowerCase().includes(regionSearchQuery.toLowerCase()))
+                          .map(region => (
+                          <label
+                            key={region}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              padding: '8px 12px',
+                              fontSize: '13px',
+                              color: '#374151',
+                              cursor: 'pointer',
+                              userSelect: 'none'
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
+                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedRegions.has(region)}
+                              onChange={() => {
+                                setSelectedRegions(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(region)) {
+                                    next.delete(region);
+                                  } else {
+                                    next.add(region);
+                                  }
+                                  return next;
+                                });
+                              }}
+                              style={{ width: '16px', height: '16px', accentColor: '#4f46e5', cursor: 'pointer' }}
+                            />
+                            {region}
+                          </label>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Bucket Selector */}
           <div style={{ padding: '16px', borderBottom: '1px solid #e5e7eb' }}>
             <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: '#374151', marginBottom: '8px' }}>
@@ -533,7 +792,7 @@ async function handleDeleteFolder(folderPath: string) {
               }}
             >
               <option value=''>Select a bucket</option>
-              {buckets.map(b=><option key={b.name} value={b.name}>{b.name}</option>)}
+              {buckets.map(b=><option key={b.name} value={b.name}>{b.name}{b.region ? ` (${b.region})` : ''}</option>)}
             </select>
           </div>
 
