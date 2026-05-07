@@ -1,0 +1,30 @@
+{
+  "name": "s3-dashboard",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Top-level workspace for s3-dashboard. Use npm install to set up husky and shared dev tooling.",
+  "scripts": {
+    "prepare": "husky install",
+    "format": "prettier --write \"backend/src/**/*.{ts,tsx}\" \"frontend/{pages,lib,components}/**/*.{ts,tsx}\" \"*.md\"",
+    "format:check": "prettier --check \"backend/src/**/*.{ts,tsx}\" \"frontend/{pages,lib,components}/**/*.{ts,tsx}\" \"*.md\"",
+    "lint": "npm --prefix backend run lint && npm --prefix frontend run lint",
+    "typecheck": "npm --prefix backend run typecheck && npm --prefix frontend run typecheck",
+    "test": "npm --prefix backend test"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^15.2.10",
+    "prettier": "^3.3.3"
+  },
+  "lint-staged": {
+    "backend/**/*.{ts,tsx}": [
+      "prettier --write",
+      "bash -c 'cd backend && npx eslint --fix'"
+    ],
+    "frontend/**/*.{ts,tsx}": [
+      "prettier --write",
+      "bash -c 'cd frontend && npx eslint --fix'"
+    ],
+    "*.{md,json,yml,yaml}": ["prettier --write"]
+  }
+}

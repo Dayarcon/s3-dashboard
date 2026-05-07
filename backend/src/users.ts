@@ -1,301 +1,270 @@
 import express from 'express';
-import { db, createUser, insertAudit } from './db';
 import bcrypt from 'bcrypt';
+import { z } from 'zod';
+import { db, createUser, insertAudit } from './db';
 import { authMiddleware, AuthRequest } from './middleware/authMiddleware';
+import { config } from './config';
+import { AppError, asyncHandler } from './errors';
+import { validate } from './validate';
+import { assertPasswordPolicy } from './passwordPolicy';
 
 const router = express.Router();
 
-// List all users
-router.get('/', authMiddleware, (req: AuthRequest, res) => {
-    if (req.user?.role !== 'admin') {
-      return res.status(403).json({ error: 'only admin can list users' });
-    }
-  
-    try {
-      const rows = db.prepare(`
-        SELECT 
-          u.id,
-          u.username,
-          u.role,
-          u.is_active,
-          u.created_at,
-          g.id as group_id,
-          g.name as group_name
-        FROM users u
-        LEFT JOIN user_groups ug ON ug.user_id = u.id
-        LEFT JOIN groups g ON g.id = ug.group_id
-        ORDER BY u.created_at DESC
-      `).all() as Array<{
-        id: number;
-        username: string;
-        role: string;
-        is_active: number;
-        created_at: string;
-        group_id: number | null;
-        group_name: string | null;
-      }>;
-  
-      // Group rows per user
-      const usersMap: Record<number, any> = {};
-  
-      for (const row of rows) {
-        if (!usersMap[row.id]) {
-          usersMap[row.id] = {
-            id: row.id,
-            username: row.username,
-            role: row.role,
-            is_active: row.is_active,
-            created_at: row.created_at,
-            groups: []
-          };
-        }
-  
-        if (row.group_id) {
-          usersMap[row.id].groups.push({
-            id: row.group_id,
-            name: row.group_name
-          });
-        }
+function requireAdmin(req: AuthRequest) {
+  if (req.user?.role !== 'admin') throw new AppError('admin_only', 403);
+}
+
+router.get(
+  '/',
+  authMiddleware,
+  asyncHandler(async (req: AuthRequest, res) => {
+    requireAdmin(req);
+
+    const rows = db
+      .prepare(
+        `SELECT u.id, u.username, u.role, u.is_active, u.created_at,
+                g.id as group_id, g.name as group_name
+         FROM users u
+         LEFT JOIN user_groups ug ON ug.user_id = u.id
+         LEFT JOIN groups g ON g.id = ug.group_id
+         ORDER BY u.created_at DESC`
+      )
+      .all() as Array<{
+      id: number;
+      username: string;
+      role: string;
+      is_active: number;
+      created_at: string;
+      group_id: number | null;
+      group_name: string | null;
+    }>;
+
+    const usersMap: Record<number, any> = {};
+    for (const row of rows) {
+      if (!usersMap[row.id]) {
+        usersMap[row.id] = {
+          id: row.id,
+          username: row.username,
+          role: row.role,
+          is_active: row.is_active,
+          created_at: row.created_at,
+          groups: [],
+        };
       }
-  
-      try { insertAudit(req.user?.sub || null, 'list_users', 'users', {}); } catch (e) {}
-      res.json(Object.values(usersMap));
-    } catch (err: any) {
-      res.status(500).json({ error: 'failed_to_list_users', detail: err.message });
+      if (row.group_id) {
+        usersMap[row.id].groups.push({ id: row.group_id, name: row.group_name });
+      }
     }
-  });
 
-// Get user details by ID (including groups and permissions)
-router.get('/:userId', authMiddleware, (req: AuthRequest, res) => {
-    if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'only admin can view user details' });
-    }
-    try {
-        const userId = Number(req.params.userId);
-        if (!userId || isNaN(userId)) {
-            return res.status(400).json({ error: 'invalid user id' });
-        }
+    insertAudit(req.user?.sub ?? null, 'list_users', 'users', {});
+    res.json(Object.values(usersMap));
+  })
+);
 
-        // Get user basic info
-        const user = db.prepare('SELECT id, username, role, is_active, created_at FROM users WHERE id = ?').get(userId);
-        if (!user) {
-            return res.status(404).json({ error: 'user not found' });
-        }
+const userIdParam = z.object({ userId: z.coerce.number().int().positive() });
 
-        // Get user's groups
-        const userGroups = db.prepare(`
-            SELECT g.id, g.name, g.created_at
-            FROM groups g
-            INNER JOIN user_groups ug ON g.id = ug.group_id
-            WHERE ug.user_id = ?
-        `).all(userId);
+router.get(
+  '/:userId',
+  authMiddleware,
+  validate(userIdParam, 'params'),
+  asyncHandler(async (req: AuthRequest, res) => {
+    requireAdmin(req);
+    const userId = (req.params as any).userId as number;
 
-        // Get permissions for each group
-        const groupsWithPermissions = userGroups.map((group: any) => {
-            const permissions = db.prepare(`
-                SELECT id, resource, access
-                FROM permissions
-                WHERE group_id = ?
-            `).all(group.id);
-            return {
-                ...group,
-                permissions
-            };
-        });
-
-    try { insertAudit(req.user?.sub || null, 'view_user', `user:${userId}`, {}); } catch (e) {}
-    res.json({
-      ...user,
-      groups: groupsWithPermissions
-    });
-    } catch (err: any) {
-        res.status(500).json({ error: 'failed_to_get_user_details', detail: err.message });
-    }
-});
-
-// Create user
-router.post('/', authMiddleware, async (req: AuthRequest, res) => {
-    if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'only admin can create users' });
-    }
-    const { username, password, role } = req.body;
-    if (!username || !password) {
-        return res.status(400).json({ error: 'username and password required' });
-    }
-    try {
-        // Check if user already exists
-        const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
-        if (existing) {
-            return res.status(409).json({ error: 'user already exists' });
-        }
-        
-        const hash = await bcrypt.hash(password, 10);
-    const id = createUser(username, hash, role || 'user');
-    try { insertAudit(req.user?.sub || null, 'create_user', `user:${id}`, { username, role: role || 'user' }); } catch (e) {}
-    res.json({ id, username, role: role || 'user' });
-    } catch (err: any) {
-        res.status(500).json({ error: 'user_creation_failed', detail: err.message });
-    }
-});
-
-// Delete user
-router.delete('/:userId', authMiddleware, (req: AuthRequest, res) => {
-  if (req.user?.role !== 'admin') {
-    return res.status(403).json({ error: 'only admin can delete users' });
-  }
-
-  const userId = Number(req.params.userId);
-
-  if (!userId || isNaN(userId)) {
-    return res.status(400).json({ error: 'invalid user id' });
-  }
-
-  // Prevent admin deleting himself
-  if (req.user.sub === userId) {  // Changed from req.user.id to req.user.sub
-    return res.status(400).json({ error: 'admin_cannot_delete_self' });
-  }
-
-  try {
     const user = db
-      .prepare('SELECT id, username FROM users WHERE id = ?')
+      .prepare('SELECT id, username, role, is_active, created_at FROM users WHERE id = ?')
       .get(userId);
+    if (!user) throw new AppError('user_not_found', 404);
 
-    if (!user) {
-      return res.status(404).json({ error: 'user_not_found' });
+    const userGroups = db
+      .prepare(
+        `SELECT g.id, g.name, g.created_at
+         FROM groups g
+         INNER JOIN user_groups ug ON g.id = ug.group_id
+         WHERE ug.user_id = ?`
+      )
+      .all(userId);
+
+    const groupsWithPermissions = (userGroups as any[]).map((group) => {
+      const permissions = db
+        .prepare('SELECT id, resource, access FROM permissions WHERE group_id = ?')
+        .all(group.id);
+      return { ...group, permissions };
+    });
+
+    insertAudit(req.user?.sub ?? null, 'view_user', `user:${userId}`, {});
+    res.json({ ...user, groups: groupsWithPermissions });
+  })
+);
+
+const createUserSchema = z.object({
+  username: z.string().min(1).max(128),
+  password: z.string().min(1).max(512),
+  role: z.string().max(64).optional(),
+});
+
+router.post(
+  '/',
+  authMiddleware,
+  validate(createUserSchema),
+  asyncHandler(async (req: AuthRequest, res) => {
+    requireAdmin(req);
+    const { username, password, role } = req.body as z.infer<typeof createUserSchema>;
+    assertPasswordPolicy(password);
+
+    if (db.prepare('SELECT id FROM users WHERE username = ?').get(username)) {
+      throw new AppError('user_exists', 409);
     }
+    const hash = await bcrypt.hash(password, config.auth.bcryptRounds);
+    const id = createUser(username, hash, role || 'user');
+    insertAudit(req.user?.sub ?? null, 'create_user', `user:${id}`, {
+      username,
+      role: role || 'user',
+    });
+    res.json({ id, username, role: role || 'user' });
+  })
+);
+
+router.delete(
+  '/:userId',
+  authMiddleware,
+  validate(userIdParam, 'params'),
+  asyncHandler(async (req: AuthRequest, res) => {
+    requireAdmin(req);
+    const userId = (req.params as any).userId as number;
+
+    if (req.user!.sub === userId) {
+      throw new AppError('admin_cannot_delete_self', 400);
+    }
+
+    const user = db.prepare('SELECT id, username FROM users WHERE id = ?').get(userId);
+    if (!user) throw new AppError('user_not_found', 404);
 
     const tx = db.transaction(() => {
-      // Delete audit logs for this user (or set user_id to NULL to preserve history)
-      // Option 1: Delete audit logs
-      db.prepare('DELETE FROM audit_logs WHERE user_id = ?').run(userId);
-      
-      // Option 2: If you want to preserve audit history, set user_id to NULL instead:
-      // db.prepare('UPDATE audit_logs SET user_id = NULL WHERE user_id = ?').run(userId);
-      
-      // Remove user from groups
+      // Preserve audit history: NULL out the user_id rather than deleting rows.
+      db.prepare('UPDATE audit_logs SET user_id = NULL WHERE user_id = ?').run(userId);
       db.prepare('DELETE FROM user_groups WHERE user_id = ?').run(userId);
-
-      // Delete user
+      db.prepare('DELETE FROM user_buckets WHERE user_id = ?').run(userId);
       db.prepare('DELETE FROM users WHERE id = ?').run(userId);
     });
-
     tx();
-    try { insertAudit(req.user?.sub || null, 'delete_user', `user:${userId}`, {}); } catch (e) {}
-    res.json({
-      ok: true,
-      message: 'user_deleted',
-      userId
-    });
-  } catch (err: any) {
-    res.status(500).json({
-      error: 'failed_to_delete_user',
-      detail: err.message
-    });
-  }
+
+    insertAudit(req.user?.sub ?? null, 'delete_user', `user:${userId}`, {});
+    res.json({ ok: true, message: 'user_deleted', userId });
+  })
+);
+
+const updateUserSchema = z.object({
+  username: z.string().min(1).max(128).optional(),
+  role: z.string().max(64).optional(),
+  is_active: z.boolean().optional(),
 });
 
-router.put('/:userId', authMiddleware, async (req: AuthRequest, res) => {
-  if (req.user?.role !== 'admin' && req.user?.sub !== Number(req.params.userId)) {
-    return res.status(403).json({ error: 'forbidden' });
-  }
+router.put(
+  '/:userId',
+  authMiddleware,
+  validate(userIdParam, 'params'),
+  validate(updateUserSchema),
+  asyncHandler(async (req: AuthRequest, res) => {
+    const userId = (req.params as any).userId as number;
+    if (req.user?.role !== 'admin' && req.user?.sub !== userId) {
+      throw new AppError('forbidden', 403);
+    }
 
-  const userId = Number(req.params.userId);
-  const { username, role, is_active } = req.body;
-
-  try {
+    const body = req.body as z.infer<typeof updateUserSchema>;
     const user = db.prepare('SELECT id FROM users WHERE id = ?').get(userId);
-    if (!user) return res.status(404).json({ error: 'user_not_found' });
+    if (!user) throw new AppError('user_not_found', 404);
 
     const updates: string[] = [];
     const values: any[] = [];
-
-    if (username !== undefined) {
-      const existing = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(username, userId);
-      if (existing) return res.status(409).json({ error: 'username_taken' });
+    if (body.username !== undefined) {
+      if (
+        db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(body.username, userId)
+      ) {
+        throw new AppError('username_taken', 409);
+      }
       updates.push('username = ?');
-      values.push(username);
+      values.push(body.username);
     }
-
-    if (role !== undefined && req.user?.role === 'admin') {
+    if (body.role !== undefined && req.user?.role === 'admin') {
       updates.push('role = ?');
-      values.push(role);
+      values.push(body.role);
     }
-
-    if (is_active !== undefined && req.user?.role === 'admin') {
+    if (body.is_active !== undefined && req.user?.role === 'admin') {
       updates.push('is_active = ?');
-      values.push(is_active ? 1 : 0);
+      values.push(body.is_active ? 1 : 0);
     }
-
-    if (updates.length === 0) {
-      return res.status(400).json({ error: 'no_updates_provided' });
-    }
+    if (updates.length === 0) throw new AppError('no_updates_provided', 400);
 
     values.push(userId);
-    const sql = `UPDATE users SET ${updates.join(', ')} WHERE id = ?`;
-    db.prepare(sql).run(...values);
-    try { insertAudit(req.user?.sub || null, 'update_user', `user:${userId}`, { updates: Object.keys(req.body) }); } catch (e) {}
+    db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    insertAudit(req.user?.sub ?? null, 'update_user', `user:${userId}`, {
+      updates: Object.keys(body),
+    });
     res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: 'update_failed', detail: err.message });
-  }
+  })
+);
+
+const resetPasswordSchema = z.object({
+  newPassword: z.string().min(1).max(512).optional(),
+  must_change: z.boolean().optional(),
 });
 
-// Reset password (admin only). If `newPassword` is provided in body, use it; otherwise generate a random temp password and return it.
-router.post('/:userId/reset-password', authMiddleware, async (req: AuthRequest, res) => {
-  if (req.user?.role !== 'admin') {
-    return res.status(403).json({ error: 'admin_only' });
-  }
+router.post(
+  '/:userId/reset-password',
+  authMiddleware,
+  validate(userIdParam, 'params'),
+  validate(resetPasswordSchema),
+  asyncHandler(async (req: AuthRequest, res) => {
+    requireAdmin(req);
+    const userId = (req.params as any).userId as number;
+    const { newPassword, must_change } = req.body as z.infer<typeof resetPasswordSchema>;
 
-  const userId = Number(req.params.userId);
-  if (!userId || isNaN(userId)) return res.status(400).json({ error: 'invalid_user_id' });
-
-  const { newPassword, must_change } = req.body as { newPassword?: string; must_change?: boolean };
-
-  try {
     const user = db.prepare('SELECT id, username FROM users WHERE id = ?').get(userId);
-    if (!user) return res.status(404).json({ error: 'user_not_found' });
+    if (!user) throw new AppError('user_not_found', 404);
 
     let passwordToStore = newPassword;
     let generatedTemp: string | null = null;
     if (!passwordToStore) {
-      // generate a temporary password
-      generatedTemp = Math.random().toString(36).slice(-10) + Math.random().toString(36).slice(-4);
+      // Generate a strong temporary password that satisfies the policy.
+      const rand = require('crypto').randomBytes(12).toString('base64url');
+      generatedTemp = `Tmp${rand}9`;
       passwordToStore = generatedTemp;
+    } else {
+      assertPasswordPolicy(passwordToStore);
     }
 
-  const hash = await bcrypt.hash(passwordToStore, 10);
-  const setMustChange = (generatedTemp ? true : !!must_change) ? 1 : 0;
-  db.prepare('UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?').run(hash, setMustChange, userId);
-  try { insertAudit(req.user?.sub || null, 'reset_password', `user:${userId}`, { generatedTemp: !!generatedTemp, must_change: !!setMustChange }); } catch (e) {}
+    const hash = await bcrypt.hash(passwordToStore, config.auth.bcryptRounds);
+    const setMustChange = (generatedTemp ? true : !!must_change) ? 1 : 0;
+    db.prepare(
+      'UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?'
+    ).run(hash, setMustChange, userId);
+    insertAudit(req.user?.sub ?? null, 'reset_password', `user:${userId}`, {
+      generatedTemp: !!generatedTemp,
+      must_change: !!setMustChange,
+    });
+
     const resp: any = { ok: true };
     if (generatedTemp) resp.tempPassword = generatedTemp;
     res.json(resp);
-  } catch (err: any) {
-    console.error('reset password failed', err);
-    res.status(500).json({ error: 'reset_failed', detail: err.message });
-  }
-});
+  })
+);
 
-// Activate/Deactivate user
-router.patch('/:userId/status', authMiddleware, (req: AuthRequest, res) => {
-  if (req.user?.role !== 'admin') {
-    return res.status(403).json({ error: 'admin_only' });
-  }
+const statusSchema = z.object({ is_active: z.boolean() });
 
-  const userId = Number(req.params.userId);
-  const { is_active } = req.body;
-
-  if (typeof is_active !== 'boolean') {
-    return res.status(400).json({ error: 'is_active_must_be_boolean' });
-  }
-
-  try {
+router.patch(
+  '/:userId/status',
+  authMiddleware,
+  validate(userIdParam, 'params'),
+  validate(statusSchema),
+  asyncHandler(async (req: AuthRequest, res) => {
+    requireAdmin(req);
+    const userId = (req.params as any).userId as number;
+    const { is_active } = req.body as z.infer<typeof statusSchema>;
     db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(is_active ? 1 : 0, userId);
-    try { insertAudit(req.user?.sub || null, 'set_user_active', `user:${userId}`, { is_active }); } catch (e) {}
+    insertAudit(req.user?.sub ?? null, 'set_user_active', `user:${userId}`, { is_active });
     res.json({ ok: true, is_active });
-  } catch (err: any) {
-    res.status(500).json({ error: 'status_update_failed', detail: err.message });
-  }
-});
-  
+  })
+);
+
 export default router;

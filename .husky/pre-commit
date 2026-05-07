@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Run lint-staged on staged files. Skip if husky isn't installed yet.
+. "$(dirname -- "$0")/_/husky.sh" 2>/dev/null || true
+
+npx --no-install lint-staged

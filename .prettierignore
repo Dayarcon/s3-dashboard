@@ -1,0 +1,9 @@
+node_modules
+dist
+.next
+out
+backend/data
+backend/backups
+coverage
+*.tsbuildinfo
+package-lock.json

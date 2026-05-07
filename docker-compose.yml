@@ -1,15 +1,78 @@
-version: '3.8'
+# docker-compose.yml
+#
+# Single-host production-ish stack: nginx terminates HTTP on port 80 and routes
+# /api+/auth to the backend, everything else to the Next.js frontend.
+#
+# Usage:
+#   1. Copy .env.example values into a top-level .env (or export them).
+#   2. docker compose up -d --build
+#   3. Visit http://localhost (or whatever DNS points at this host).
+#
+# For HTTPS, run a TLS terminator (Caddy, Cloudflare, or nginx with certs) in
+# front, or extend the nginx service with letsencrypt + certbot.
+
 services:
   backend:
-    build: ./backend
-    ports:
-      - '4000:4000'
-    env_file:
-      - ./backend/.env
+    build:
+      context: ./backend
+    image: s3-dashboard-backend:latest
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1h}
+      CORS_ALLOWLIST: ${CORS_ALLOWLIST:-http://localhost}
+      SUPER_ADMIN_USERNAME: ${SUPER_ADMIN_USERNAME:-}
+      SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:-}
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
+      LOGIN_RATE_LIMIT_MAX: ${LOGIN_RATE_LIMIT_MAX:-10}
+      MIN_PASSWORD_LENGTH: ${MIN_PASSWORD_LENGTH:-8}
+      REQUIRE_PASSWORD_COMPLEXITY: ${REQUIRE_PASSWORD_COMPLEXITY:-true}
+      PUBLIC_SIGNUP_ENABLED: ${PUBLIC_SIGNUP_ENABLED:-false}
+      DATA_DIR: /app/data
+    volumes:
+      - backend-data:/app/data
+    networks:
+      - app
 
   frontend:
-    build: ./frontend
-    ports:
-      - '3000:3000'
+    build:
+      context: ./frontend
+      args:
+        # Empty value = use same-origin (recommended behind the nginx proxy).
+        NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:-}
+    image: s3-dashboard-frontend:latest
+    restart: unless-stopped
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:4000
+      NODE_ENV: production
+      PORT: 3000
+    depends_on:
+      - backend
+    networks:
+      - app
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - app
+
+volumes:
+  backend-data:
+
+networks:
+  app:
+    driver: bridge
