@@ -65,7 +65,8 @@ router.get(
   asyncHandler(async (req: AuthRequest, res) => {
     if (!req.user) throw new AppError('unauthorized', 401);
     const creds = await getWorkspaceCreds(req.user.workspaceId);
-    const all = await getAllBucketsWithMetrics(req.user.workspaceId, creds || undefined);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    const all = await getAllBucketsWithMetrics(req.user.workspaceId, creds);
     const visible = await filterByVisibility(req.user.workspaceId, req.user, all);
     res.json(visible);
   })
@@ -94,10 +95,11 @@ router.get(
     }
 
     const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
     const metrics = await getDetailedBucketMetrics(
       req.user.workspaceId,
       bucketName,
-      creds || undefined
+      creds
     );
     res.json(metrics);
   })
@@ -109,7 +111,8 @@ router.get(
   asyncHandler(async (req: AuthRequest, res) => {
     if (!req.user) throw new AppError('unauthorized', 401);
     const creds = await getWorkspaceCreds(req.user.workspaceId);
-    const all = await getAllBucketsWithMetrics(req.user.workspaceId, creds || undefined);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    const all = await getAllBucketsWithMetrics(req.user.workspaceId, creds);
     const visible = await filterByVisibility(req.user.workspaceId, req.user, all);
 
     const totalStorage = visible.reduce((sum, b: any) => sum + (b.totalSize || 0), 0);
@@ -117,7 +120,7 @@ router.get(
 
     const detailedResults = await Promise.allSettled(
       visible.map((b: any) =>
-        getDetailedBucketMetrics(req.user!.workspaceId, b.name, creds || undefined)
+        getDetailedBucketMetrics(req.user!.workspaceId, b.name, creds)
       )
     );
 
