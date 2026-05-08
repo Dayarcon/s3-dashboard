@@ -1,5 +1,14 @@
 // backend/src/uploadSessions.ts
-import { db } from './db';
+// Wrapper around db functions for upload session management
+
+import {
+  createSession as dbCreateSession,
+  getSession as dbGetSession,
+  recordPart as dbRecordPart,
+  markCompleted as dbMarkCompleted,
+  markAborted as dbMarkAborted,
+  cleanupStale as dbCleanupStale,
+} from './db';
 
 export type UploadStatus = 'pending' | 'uploading' | 'completed' | 'aborted' | 'error';
 export type Part = { PartNumber: number; ETag: string };
@@ -28,66 +37,46 @@ function rowToSession(row: any): UploadSession {
     totalBytes: total,
     uploadedBytes: uploaded,
     status: row.status as UploadStatus,
-    parts: JSON.parse(row.parts_json || '[]') as Part[],
+    parts: typeof row.parts === 'string' ? JSON.parse(row.parts || '[]') : (row.parts || []) as Part[],
     progress,
   };
 }
 
-export function createSession(args: {
+export async function createSession(args: {
   uploadId: string;
+  workspaceId: number;
   bucket: string;
   key: string;
   userId: number | null;
   totalBytes: number;
 }) {
-  db.prepare(
-    `INSERT INTO upload_sessions (upload_id, bucket, key, user_id, total_bytes, uploaded_bytes, status, parts_json)
-     VALUES (?, ?, ?, ?, ?, 0, 'pending', '[]')`
-  ).run(args.uploadId, args.bucket, args.key, args.userId, args.totalBytes);
+  await dbCreateSession(
+    args.uploadId,
+    args.workspaceId,
+    args.bucket,
+    args.key,
+    args.userId,
+    args.totalBytes
+  );
 }
 
-export function getSession(uploadId: string): UploadSession | null {
-  const row = db.prepare('SELECT * FROM upload_sessions WHERE upload_id = ?').get(uploadId);
+export async function getSession(uploadId: string): Promise<UploadSession | null> {
+  const row = await dbGetSession(uploadId);
   return row ? rowToSession(row) : null;
 }
 
-export function recordPart(uploadId: string, part: Part, bytes: number) {
-  const row = db
-    .prepare('SELECT parts_json, uploaded_bytes FROM upload_sessions WHERE upload_id = ?')
-    .get(uploadId) as any;
-  if (!row) return;
-  const parts: Part[] = JSON.parse(row.parts_json || '[]');
-  // Replace any existing part with same PartNumber, then append.
-  const filtered = parts.filter((p) => p.PartNumber !== part.PartNumber);
-  filtered.push(part);
-  const uploaded = Number(row.uploaded_bytes || 0) + bytes;
-  db.prepare(
-    `UPDATE upload_sessions
-     SET parts_json = ?, uploaded_bytes = ?, status = 'uploading', updated_at = CURRENT_TIMESTAMP
-     WHERE upload_id = ?`
-  ).run(JSON.stringify(filtered), uploaded, uploadId);
+export async function recordPart(uploadId: string, partNumber: number, etag: string): Promise<void> {
+  await dbRecordPart(uploadId, partNumber, etag);
 }
 
-export function markCompleted(uploadId: string) {
-  db.prepare(
-    `UPDATE upload_sessions
-     SET status = 'completed', uploaded_bytes = total_bytes, updated_at = CURRENT_TIMESTAMP
-     WHERE upload_id = ?`
-  ).run(uploadId);
+export async function markCompleted(uploadId: string): Promise<void> {
+  await dbMarkCompleted(uploadId);
 }
 
-export function markAborted(uploadId: string) {
-  db.prepare(
-    `UPDATE upload_sessions SET status = 'aborted', updated_at = CURRENT_TIMESTAMP WHERE upload_id = ?`
-  ).run(uploadId);
+export async function markAborted(uploadId: string): Promise<void> {
+  await dbMarkAborted(uploadId);
 }
 
-/** Drop sessions older than the given age (ms) and not currently uploading. */
-export function cleanupStale(maxAgeMs: number) {
-  const cutoffIso = new Date(Date.now() - maxAgeMs).toISOString();
-  db.prepare(
-    `DELETE FROM upload_sessions
-     WHERE updated_at < ?
-     AND status IN ('completed', 'aborted', 'error')`
-  ).run(cutoffIso);
+export async function cleanupStale(maxAgeMs: number): Promise<void> {
+  await dbCleanupStale(maxAgeMs);
 }

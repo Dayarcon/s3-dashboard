@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getGroups, assignUserToGroup, createUser, getUserDetails, deleteUser, resetUserPassword } from '../lib/api';
+import { getGroups, assignUserToGroup, createUser, getUserDetails, deleteUser, resetUserPassword, inviteUser } from '../lib/api';
 import { axiosWithAuth, getUser, getToken, logout, checkTokenAndLogout } from '../lib/auth';
 import Router from 'next/router';
 import Link from 'next/link';
@@ -47,6 +47,12 @@ export default function UsersPage() {
   const [assignGroupUserId, setAssignGroupUserId] = useState<number | null>(null);
   const [assignGroupUsername, setAssignGroupUsername] = useState('');
   const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
+
+  // Invite user modal state
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteRole, setInviteRole] = useState<'admin' | 'member'>('member');
+  const [inviteUrl, setInviteUrl] = useState('');
+  const [inviteCopied, setInviteCopied] = useState(false);
 
   useEffect(() => {
     // Check token expiration on component mount
@@ -211,6 +217,26 @@ export default function UsersPage() {
     logout();
     Router.push('/login');
   };
+
+  async function handleGenerateInvite() {
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await inviteUser(inviteRole);
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+      const fullUrl = `${appUrl}/join?code=${res.code}`;
+      setInviteUrl(fullUrl);
+    } catch (err: any) {
+      console.error('Failed to generate invite:', err);
+      setError(err?.response?.data?.error || 'Failed to generate invite link');
+    }
+  }
+
+  function copyInviteUrl() {
+    navigator.clipboard.writeText(inviteUrl);
+    setInviteCopied(true);
+    setTimeout(() => setInviteCopied(false), 2000);
+  }
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f9fafb' }}>
@@ -424,40 +450,69 @@ export default function UsersPage() {
           padding: '24px',
           marginBottom: '24px'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: showCreateForm ? '16px' : '0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: showCreateForm ? '16px' : '0', gap: '12px', flexWrap: 'wrap' }}>
             <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#111827', margin: 0 }}>
               Create New User
             </h2>
-            <button
-              onClick={() => {
-                setShowCreateForm(!showCreateForm);
-                if (showCreateForm) {
-                  setNewUsername('');
-                  setNewPassword('');
-                  setNewRole('user');
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                onClick={() => {
+                  setShowInviteModal(true);
+                  setInviteUrl('');
+                  setInviteRole('member');
                   setError(null);
-                }
-              }}
-              style={{
-                padding: '8px 16px',
-                fontSize: '14px',
-                fontWeight: 500,
-                color: '#4f46e5',
-                backgroundColor: 'transparent',
-                border: '1px solid #4f46e5',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                transition: 'all 0.2s'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = '#eef2ff';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }}
-            >
-              {showCreateForm ? 'Cancel' : '+ New User'}
-            </button>
+                }}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  color: '#8b5cf6',
+                  backgroundColor: 'transparent',
+                  border: '1px solid #8b5cf6',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#f5f3ff';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }}
+              >
+                📧 Invite User
+              </button>
+              <button
+                onClick={() => {
+                  setShowCreateForm(!showCreateForm);
+                  if (showCreateForm) {
+                    setNewUsername('');
+                    setNewPassword('');
+                    setNewRole('user');
+                    setError(null);
+                  }
+                }}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  color: '#4f46e5',
+                  backgroundColor: 'transparent',
+                  border: '1px solid #4f46e5',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#eef2ff';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }}
+              >
+                {showCreateForm ? 'Cancel' : '+ New User'}
+              </button>
+            </div>
           </div>
 
           {showCreateForm && (
@@ -703,6 +758,231 @@ export default function UsersPage() {
                   )}
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Invite User Modal */}
+        {showInviteModal && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1001,
+            padding: '20px'
+          }} onClick={() => setShowInviteModal(false)}>
+            <div style={{
+              backgroundColor: 'white',
+              borderRadius: '12px',
+              maxWidth: '500px',
+              width: '100%',
+              padding: '24px',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+            }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+                <h2 style={{ fontSize: '20px', fontWeight: 600, color: '#111827', margin: 0 }}>
+                  Invite User to Workspace
+                </h2>
+                <button
+                  onClick={() => {
+                    setShowInviteModal(false);
+                    setInviteUrl('');
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: '24px',
+                    color: '#6b7280',
+                    cursor: 'pointer',
+                    padding: '4px 8px'
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              {!inviteUrl ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '14px',
+                      fontWeight: 500,
+                      color: '#374151',
+                      marginBottom: '8px'
+                    }}>
+                      Invite Role *
+                    </label>
+                    <select
+                      value={inviteRole}
+                      onChange={e => setInviteRole(e.target.value as 'admin' | 'member')}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        fontSize: '14px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '6px',
+                        outline: 'none',
+                        boxSizing: 'border-box',
+                        backgroundColor: 'white'
+                      }}
+                      onFocus={(e) => e.currentTarget.style.borderColor = '#4f46e5'}
+                      onBlur={(e) => e.currentTarget.style.borderColor = '#d1d5db'}
+                    >
+                      <option value="member">Member</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '8px' }}>
+                    <button
+                      onClick={() => {
+                        setShowInviteModal(false);
+                        setInviteUrl('');
+                      }}
+                      style={{
+                        padding: '10px 20px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        color: '#374151',
+                        backgroundColor: 'transparent',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        transition: 'background-color 0.2s'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = '#f3f4f6';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleGenerateInvite}
+                      disabled={loading}
+                      style={{
+                        padding: '10px 20px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        color: 'white',
+                        backgroundColor: loading ? '#9ca3af' : '#8b5cf6',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: loading ? 'not-allowed' : 'pointer',
+                        transition: 'background-color 0.2s'
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!loading) e.currentTarget.style.backgroundColor = '#7c3aed';
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!loading) e.currentTarget.style.backgroundColor = '#8b5cf6';
+                      }}
+                    >
+                      {loading ? 'Generating...' : 'Generate Invite Link'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div style={{
+                    backgroundColor: '#f0fdf4',
+                    border: '1px solid #bbf7d0',
+                    borderRadius: '8px',
+                    padding: '12px 16px'
+                  }}>
+                    <p style={{ fontSize: '13px', color: '#166534', margin: '0 0 8px 0', fontWeight: 500 }}>
+                      ✓ Invite link generated successfully!
+                    </p>
+                    <p style={{ fontSize: '12px', color: '#166534', margin: 0 }}>
+                      Share this link with the user. It will expire in 48 hours.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '14px',
+                      fontWeight: 500,
+                      color: '#374151',
+                      marginBottom: '8px'
+                    }}>
+                      Invite URL
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <input
+                        type="text"
+                        value={inviteUrl}
+                        readOnly
+                        style={{
+                          flex: 1,
+                          padding: '10px 12px',
+                          fontSize: '13px',
+                          border: '1px solid #d1d5db',
+                          borderRadius: '6px',
+                          outline: 'none',
+                          boxSizing: 'border-box',
+                          backgroundColor: '#f9fafb'
+                        }}
+                      />
+                      <button
+                        onClick={copyInviteUrl}
+                        style={{
+                          padding: '10px 16px',
+                          fontSize: '14px',
+                          fontWeight: 500,
+                          color: inviteCopied ? '#fff' : '#4f46e5',
+                          backgroundColor: inviteCopied ? '#10b981' : 'transparent',
+                          border: `1px solid ${inviteCopied ? '#10b981' : '#4f46e5'}`,
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s'
+                        }}
+                      >
+                        {inviteCopied ? '✓ Copied' : 'Copy'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '8px' }}>
+                    <button
+                      onClick={() => {
+                        setShowInviteModal(false);
+                        setInviteUrl('');
+                        setSuccess('Invite link copied to clipboard!');
+                        setTimeout(() => setSuccess(null), 3000);
+                      }}
+                      style={{
+                        padding: '10px 20px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        color: 'white',
+                        backgroundColor: '#4f46e5',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        transition: 'background-color 0.2s'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = '#4338ca';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = '#4f46e5';
+                      }}
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

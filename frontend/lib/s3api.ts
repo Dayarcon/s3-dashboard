@@ -69,6 +69,13 @@ export async function getFileMetadata(bucket: string, key: string) {
   return res.data;
 }
 
+// Generate presigned URL for sharing
+export async function getPresignedUrl(bucket: string, key: string, expiresIn: number) {
+  const api = axiosWithAuth();
+  const res = await api.get('/api/file/presign', { params: { bucket, key, expiresIn } });
+  return res.data as { url: string; expiresAt: string; expiresIn: number };
+}
+
 // Upload file with progress tracking
 export async function uploadFile(bucket: string, key: string, file: File, onProgress?: (progress: number) => void) {
   const api = axiosWithAuth();

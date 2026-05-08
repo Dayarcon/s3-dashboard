@@ -3,7 +3,7 @@ import { listBuckets, listRegions, listPrefix, getFile, putFile } from '../lib/s
 import Router from 'next/router';
 import { getToken, getUser, logout, checkTokenAndLogout, fetchMe } from '../lib/auth';
 import Link from 'next/link';
-import { deleteFile, deleteFiles, copyFile, moveFile, getFileMetadata, createFolder, deleteFolder } from '../lib/s3api';
+import { deleteFile, deleteFiles, copyFile, moveFile, getFileMetadata, createFolder, deleteFolder, getPresignedUrl } from '../lib/s3api';
 import UploadWithProgress from '../components/UploadWithProgress';
 import FilePreviewModal from '../components/FilePreviewModal';
 export default function Explorer(){
@@ -36,6 +36,15 @@ const [newFileName, setNewFileName] = useState('');
 const [newFolderName, setNewFolderName] = useState('');
 const [showCreateFileModal, setShowCreateFileModal] = useState(false);
 const [newFileContent, setNewFileContent] = useState('');
+const [showPresignModal, setShowPresignModal] = useState(false);
+const [presignedUrl, setPresignedUrl] = useState<string | null>(null);
+const [presignedUrlKey, setPresignedUrlKey] = useState<string | null>(null);
+const [presignedExpiresAt, setPresignedExpiresAt] = useState<string | null>(null);
+const [presignUrlExpiry, setPresignUrlExpiry] = useState(3600);
+const [presignLoading, setPresignLoading] = useState(false);
+const [fileSearchQuery, setFileSearchQuery] = useState('');
+const [fileExtFilter, setFileExtFilter] = useState('');
+const [showFilters, setShowFilters] = useState(false);
 
 
   useEffect(() => {
@@ -147,6 +156,8 @@ const [newFileContent, setNewFileContent] = useState('');
     if(!selectedBucket) return
     setLoading(true)
     setError(null)
+    setFileSearchQuery('')
+    setFileExtFilter('')
     try {
       const d = await listPrefix(selectedBucket, pfx)
       setFolders(d.folders || [])
@@ -364,6 +375,22 @@ async function handleDeleteFolder(folderPath: string) {
     } else {
       setError(err.response?.data?.error || 'Failed to delete folder');
     }
+  }
+}
+
+async function handlePresign(key: string) {
+  if (!selectedBucket) return;
+  setPresignLoading(true);
+  try {
+    const result = await getPresignedUrl(selectedBucket, key, presignUrlExpiry);
+    setPresignedUrl(result.url);
+    setPresignedUrlKey(key);
+    setPresignedExpiresAt(result.expiresAt);
+    setShowPresignModal(true);
+  } catch (err: any) {
+    setError(err.response?.data?.error || 'Failed to generate link');
+  } finally {
+    setPresignLoading(false);
   }
 }
 
@@ -891,10 +918,75 @@ async function handleDeleteFolder(folderPath: string) {
                 {files.length > 0 && (
                   <div>
                     <div style={{ padding: '6px 8px', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Files</span>
+                      <span style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Files {fileSearchQuery || fileExtFilter ? `(${files.filter(f => {
+                        const name = f.key.split('/').pop()?.toLowerCase() ?? '';
+                        const matchesSearch = !fileSearchQuery || name.includes(fileSearchQuery.toLowerCase());
+                        const matchesExt = !fileExtFilter || name.endsWith(`.${fileExtFilter.toLowerCase()}`);
+                        return matchesSearch && matchesExt;
+                      }).length} of ${files.length})` : ''}</span>
+                    </div>
+                    <div style={{ marginBottom: '12px', padding: '6px 8px' }}>
+                      <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                        <input
+                          type="text"
+                          placeholder="Filter files..."
+                          value={fileSearchQuery}
+                          onChange={(e) => setFileSearchQuery(e.target.value)}
+                          style={{ flex: 1, padding: '8px 12px', fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '6px', outline: 'none' }}
+                          onFocus={(e) => e.currentTarget.style.borderColor = '#4f46e5'}
+                          onBlur={(e) => e.currentTarget.style.borderColor = '#d1d5db'}
+                        />
+                        <button
+                          onClick={() => setShowFilters(!showFilters)}
+                          style={{
+                            padding: '8px 12px',
+                            fontSize: '13px',
+                            color: showFilters ? 'white' : '#6b7280',
+                            backgroundColor: showFilters ? '#4f46e5' : 'transparent',
+                            border: `1px solid ${showFilters ? '#4f46e5' : '#d1d5db'}`,
+                            borderRadius: '6px',
+                            cursor: 'pointer'
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!showFilters) {
+                              e.currentTarget.style.backgroundColor = '#f3f4f6';
+                              e.currentTarget.style.borderColor = '#bfdbfe';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!showFilters) {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                              e.currentTarget.style.borderColor = '#d1d5db';
+                            }
+                          }}
+                        >
+                          Filters
+                        </button>
+                      </div>
+                      {showFilters && (
+                        <div style={{ padding: '8px', backgroundColor: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '6px', marginBottom: '8px' }}>
+                          <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>File Extension</label>
+                          <input
+                            type="text"
+                            placeholder="e.g., txt, pdf, jpg"
+                            value={fileExtFilter}
+                            onChange={(e) => setFileExtFilter(e.target.value)}
+                            style={{ width: '100%', padding: '8px 12px', fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '6px', outline: 'none', boxSizing: 'border-box' }}
+                            onFocus={(e) => e.currentTarget.style.borderColor = '#4f46e5'}
+                            onBlur={(e) => e.currentTarget.style.borderColor = '#d1d5db'}
+                          />
+                        </div>
+                      )}
                     </div>
                     <div>
-                      {files.map(file=>(
+                      {(() => {
+                        const visibleFiles = files.filter(f => {
+                          const name = f.key.split('/').pop()?.toLowerCase() ?? '';
+                          const matchesSearch = !fileSearchQuery || name.includes(fileSearchQuery.toLowerCase());
+                          const matchesExt = !fileExtFilter || name.endsWith(`.${fileExtFilter.toLowerCase()}`);
+                          return matchesSearch && matchesExt;
+                        });
+                        return visibleFiles.length > 0 ? visibleFiles.map(file=>(
                         <div
                           key={file.key}
                           style={{
@@ -907,14 +999,18 @@ async function handleDeleteFolder(folderPath: string) {
                           onMouseEnter={(e) => {
                             const deleteBtn = e.currentTarget.querySelector('.file-delete-btn') as HTMLElement;
                             const renameBtn = e.currentTarget.querySelector('.file-rename-btn') as HTMLElement;
+                            const shareBtn = e.currentTarget.querySelector('.file-share-btn') as HTMLElement;
                             if (deleteBtn) deleteBtn.style.display = 'flex';
                             if (renameBtn) renameBtn.style.display = 'flex';
+                            if (shareBtn) shareBtn.style.display = 'flex';
                           }}
                           onMouseLeave={(e) => {
                             const deleteBtn = e.currentTarget.querySelector('.file-delete-btn') as HTMLElement;
                             const renameBtn = e.currentTarget.querySelector('.file-rename-btn') as HTMLElement;
+                            const shareBtn = e.currentTarget.querySelector('.file-share-btn') as HTMLElement;
                             if (deleteBtn) deleteBtn.style.display = 'none';
                             if (renameBtn) renameBtn.style.display = 'none';
+                            if (shareBtn) shareBtn.style.display = 'none';
                           }}
                         >
                           <button 
@@ -984,6 +1080,31 @@ async function handleDeleteFolder(folderPath: string) {
                             </svg>
                           </button>
                           )}
+                          <button
+                            className="file-share-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handlePresign(file.key);
+                            }}
+                            style={{
+                              display: 'none',
+                              padding: '4px 6px',
+                              fontSize: '12px',
+                              color: '#4f46e5',
+                              backgroundColor: 'transparent',
+                              border: '1px solid #4f46e5',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              alignItems: 'center',
+                              justifyContent: 'center'
+                            }}
+                            title="Share"
+                            disabled={presignLoading}
+                          >
+                            <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.658 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                            </svg>
+                          </button>
                           {canWriteFile && (
                           <button
                             className="file-delete-btn"
@@ -1011,7 +1132,12 @@ async function handleDeleteFolder(folderPath: string) {
                           </button>
                           )}
                         </div>
-                      ))}
+                      )) : (
+                        <div style={{ textAlign: 'center', padding: '24px 0', fontSize: '13px', color: '#6b7280' }}>
+                          No files match the filters
+                        </div>
+                      );
+                      })()}
                     </div>
                   </div>
                 )}
@@ -1556,6 +1682,77 @@ async function handleDeleteFolder(folderPath: string) {
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
               <button onClick={() => { setShowCreateFileModal(false); setNewFileName(''); setNewFileContent(''); }} style={{ padding: '10px 20px', fontSize: '14px', fontWeight: 500, color: '#374151', backgroundColor: 'transparent', border: '1px solid #d1d5db', borderRadius: '6px', cursor: 'pointer' }}>Cancel</button>
               <button onClick={handleCreateFile} disabled={!newFileName.trim() || !selectedBucket} style={{ padding: '10px 20px', fontSize: '14px', fontWeight: 500, color: 'white', backgroundColor: !newFileName.trim() || !selectedBucket ? '#9ca3af' : '#4f46e5', border: 'none', borderRadius: '6px', cursor: !newFileName.trim() || !selectedBucket ? 'not-allowed' : 'pointer' }}>{'Create File'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Presign URL Modal */}
+      {showPresignModal && presignedUrl && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1100,
+          padding: '20px'
+        }} onClick={() => setShowPresignModal(false)}>
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            maxWidth: '600px',
+            width: '100%',
+            padding: '24px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+          }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+              <h2 style={{ fontSize: '20px', fontWeight: 600, color: '#111827', margin: 0 }}>Share File</h2>
+              <button onClick={() => setShowPresignModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', color: '#6b7280', cursor: 'pointer', padding: '4px 8px' }}>×</button>
+            </div>
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, color: '#374151', marginBottom: '8px' }}>Expiry Time</label>
+              <select value={presignUrlExpiry} onChange={async (e) => {
+                const newExpiry = Number(e.target.value);
+                setPresignUrlExpiry(newExpiry);
+                if (presignedUrlKey && selectedBucket) {
+                  setPresignLoading(true);
+                  try {
+                    const result = await getPresignedUrl(selectedBucket, presignedUrlKey, newExpiry);
+                    setPresignedUrl(result.url);
+                    setPresignedExpiresAt(result.expiresAt);
+                  } catch (err: any) {
+                    setError('Failed to regenerate link');
+                  } finally {
+                    setPresignLoading(false);
+                  }
+                }
+              }} style={{ width: '100%', padding: '10px 12px', fontSize: '14px', border: '1px solid #d1d5db', borderRadius: '6px', outline: 'none' }} disabled={presignLoading}>
+                <option value={3600}>1 hour</option>
+                <option value={86400}>24 hours</option>
+                <option value={604800}>7 days</option>
+              </select>
+            </div>
+            {presignedExpiresAt && (
+              <div style={{ marginBottom: '16px', padding: '12px', backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px' }}>
+                <p style={{ fontSize: '12px', color: '#166534', margin: 0 }}>Expires: {new Date(presignedExpiresAt).toLocaleString()}</p>
+              </div>
+            )}
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, color: '#374151', marginBottom: '8px' }}>Share Link</label>
+              <textarea value={presignedUrl} readOnly style={{ width: '100%', minHeight: '80px', fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '6px', padding: '10px', fontFamily: 'monospace', backgroundColor: '#f9fafb', color: '#374151' }} />
+            </div>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setShowPresignModal(false)} style={{ padding: '10px 20px', fontSize: '14px', fontWeight: 500, color: '#374151', backgroundColor: 'transparent', border: '1px solid #d1d5db', borderRadius: '6px', cursor: 'pointer' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>Close</button>
+              <button onClick={() => {
+                navigator.clipboard.writeText(presignedUrl);
+                setSaveMessage('Link copied to clipboard!');
+                setTimeout(() => setSaveMessage(null), 3000);
+              }} style={{ padding: '10px 20px', fontSize: '14px', fontWeight: 500, color: 'white', backgroundColor: '#4f46e5', border: 'none', borderRadius: '6px', cursor: 'pointer' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#4338ca'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#4f46e5'}>Copy Link</button>
             </div>
           </div>
         </div>

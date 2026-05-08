@@ -19,6 +19,7 @@ export default function LoginPage(){
       const token = res.data.token;
       localStorage.setItem('s3dash_token', token);
       localStorage.setItem('s3dash_user', JSON.stringify(res.data.user));
+      localStorage.setItem('s3dash_workspace_id', res.data.user.workspaceId);
       // If user must change password, redirect to change-password flow
       if (res.data.user?.must_change_password) {
         Router.push('/change-password');
@@ -218,6 +219,32 @@ export default function LoginPage(){
             )}
           </button>
         </form>
+
+        {/* Signup Link */}
+        <div style={{
+          marginTop: '24px',
+          padding: '16px',
+          backgroundColor: '#f3f4f6',
+          borderRadius: '8px',
+          textAlign: 'center'
+        }}>
+          <p style={{ fontSize: '14px', color: '#6b7280', margin: '0 0 8px 0' }}>
+            Don't have a workspace yet?
+          </p>
+          <a
+            href="/signup"
+            style={{
+              color: '#4f46e5',
+              textDecoration: 'none',
+              fontWeight: 500,
+              fontSize: '14px'
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.textDecoration = 'underline'}
+            onMouseLeave={(e) => e.currentTarget.style.textDecoration = 'none'}
+          >
+            Create a new workspace
+          </a>
+        </div>
       </div>
 
       <style>{`

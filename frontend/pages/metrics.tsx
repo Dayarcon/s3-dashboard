@@ -391,10 +391,109 @@ export default function MetricsPage() {
               backgroundColor: 'white', borderRadius: '12px',
               boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden'
             }}>
-              <div style={{ padding: '24px', borderBottom: '1px solid #e5e7eb' }}>
+              <div style={{ padding: '24px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#111827', margin: 0 }}>
                   Bucket Details
                 </h2>
+                <div style={{ position: 'relative' }}>
+                  <button
+                    onClick={() => {
+                      const menu = document.getElementById('metrics-export-menu');
+                      if (menu) {
+                        menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+                      }
+                    }}
+                    style={{
+                      padding: '6px 12px',
+                      fontSize: '13px',
+                      fontWeight: 500,
+                      color: 'white',
+                      backgroundColor: '#4f46e5',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: 'pointer'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#4338ca'}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#4f46e5'}
+                  >
+                    Export
+                  </button>
+                  <div id="metrics-export-menu" style={{
+                    display: 'none',
+                    position: 'absolute',
+                    right: 0,
+                    top: '100%',
+                    marginTop: '4px',
+                    backgroundColor: 'white',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '6px',
+                    boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+                    zIndex: 10
+                  }}>
+                    <button
+                      onClick={() => {
+                        const content = JSON.stringify({ summary, buckets }, null, 2);
+                        const blob = new Blob([content], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `metrics-export-${new Date().toISOString().slice(0, 10)}.json`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        const menu = document.getElementById('metrics-export-menu');
+                        if (menu) menu.style.display = 'none';
+                      }}
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        padding: '8px 16px',
+                        textAlign: 'left',
+                        border: 'none',
+                        backgroundColor: 'transparent',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        color: '#374151'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
+                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    >
+                      JSON
+                    </button>
+                    <button
+                      onClick={() => {
+                        const headers = 'bucket,size,objectCount,location';
+                        const rows = buckets.map(b =>
+                          [b.name, b.sizeFormatted, b.objectCount, b.location ?? ''].map(v => `"${v}"`).join(',')
+                        );
+                        const content = [headers, ...rows].join('\n');
+                        const blob = new Blob([content], { type: 'text/csv' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `metrics-export-${new Date().toISOString().slice(0, 10)}.csv`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        const menu = document.getElementById('metrics-export-menu');
+                        if (menu) menu.style.display = 'none';
+                      }}
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        padding: '8px 16px',
+                        textAlign: 'left',
+                        border: 'none',
+                        backgroundColor: 'transparent',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        color: '#374151'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
+                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    >
+                      CSV
+                    </button>
+                  </div>
+                </div>
               </div>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>

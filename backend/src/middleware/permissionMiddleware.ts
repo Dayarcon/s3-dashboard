@@ -1,6 +1,6 @@
 // backend/src/middleware/permissionMiddleware.ts
 import { Response, NextFunction } from 'express';
-import { db } from '../db';
+import { pool } from '../db';
 import { AuthRequest } from './authMiddleware';
 
 /**
@@ -12,19 +12,27 @@ import { AuthRequest } from './authMiddleware';
  * Default-deny on missing rules.
  */
 export function permissionMiddleware(resource: string, access: 'read' | 'write') {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
+  return async (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ error: 'unauthorized' });
     if (req.user.role === 'admin') return next();
 
-    const stmt = db.prepare(`
-      SELECT p.access FROM permissions p
-      JOIN user_groups ug ON ug.group_id = p.group_id
-      WHERE ug.user_id = ? AND (p.resource = ? OR p.resource LIKE ?)
-    `);
-    const rows = stmt.all(req.user.sub, resource, resource + ':%') as Array<{ access: string }>;
+    try {
+      const result = await pool.query(
+        `SELECT p.access FROM permissions p
+         JOIN user_groups ug ON ug.group_id = p.group_id
+         JOIN groups g ON g.id = p.group_id
+         WHERE ug.user_id = $1 AND g.workspace_id = $2
+           AND (p.resource = $3 OR p.resource LIKE $4)`,
+        [req.user.sub, req.user.workspaceId, resource, resource + ':%']
+      );
 
-    const allowed = rows.some((r) => r.access === access || r.access === 'read-write');
-    if (!allowed) return res.status(403).json({ error: 'forbidden' });
-    next();
+      const allowed = result.rows.some(
+        (r: any) => r.access === access || r.access === 'read-write'
+      );
+      if (!allowed) return res.status(403).json({ error: 'forbidden' });
+      next();
+    } catch (err) {
+      return res.status(500).json({ error: 'permission_check_failed' });
+    }
   };
 }

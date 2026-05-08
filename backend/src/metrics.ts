@@ -2,13 +2,35 @@ import express from 'express';
 import { z } from 'zod';
 import { authMiddleware, AuthRequest } from './middleware/authMiddleware';
 import { getAllBucketsWithMetrics, getDetailedBucketMetrics } from './s3';
-import { getAllowedBucketsForUser, totalBucketAssignments } from './db';
+import { getAllowedBucketsForUser, totalBucketAssignments, getWorkspace } from './db';
 import { asyncHandler, AppError } from './errors';
 import { validate } from './validate';
 import { formatBytes } from './utils';
 import { config } from './config';
+import { decrypt } from './crypto';
 
 const router = express.Router();
+
+// Get workspace credentials (decrypted)
+async function getWorkspaceCreds(
+  workspaceId: number
+): Promise<{ accessKeyId: string; secretAccessKey: string; region: string } | null> {
+  const workspace = await getWorkspace(workspaceId);
+  if (!workspace || !workspace.aws_access_key_enc || !workspace.aws_secret_key_enc) {
+    return null;
+  }
+  try {
+    const accessKeyId = decrypt(workspace.aws_access_key_enc, config.credentials.encryptionKey);
+    const secretAccessKey = decrypt(workspace.aws_secret_key_enc, config.credentials.encryptionKey);
+    return {
+      accessKeyId,
+      secretAccessKey,
+      region: workspace.aws_region || config.s3.defaultRegion,
+    };
+  } catch (err: any) {
+    return null;
+  }
+}
 
 /**
  * Apply the same visibility model used by /api/buckets:
@@ -18,21 +40,21 @@ const router = express.Router();
  *  - non-admin and zero assignments anywhere: empty in production (default-deny);
  *    permissive in development only when explicitly enabled.
  */
-function filterByVisibility<T extends { name?: string }>(
+async function filterByVisibility<T extends { name?: string }>(
+  workspaceId: number,
   user: NonNullable<AuthRequest['user']>,
   buckets: T[]
-): T[] {
+): Promise<T[]> {
   if (user.role === 'admin') return buckets;
 
-  const allowed = getAllowedBucketsForUser(user.sub);
+  const allowed = await getAllowedBucketsForUser(workspaceId, user.sub);
   if (Array.isArray(allowed) && allowed.length > 0) {
     return buckets.filter((b) => b.name && allowed.includes(b.name));
   }
 
-  if (totalBucketAssignments() > 0) return [];
+  const assignmentCount = await totalBucketAssignments(workspaceId);
+  if (assignmentCount > 0) return [];
 
-  // Bootstrap: no assignments configured anywhere. In production this is treated
-  // as default-deny. In development we keep the friendly behavior but log it.
   if (config.isProd) return [];
   return buckets;
 }
@@ -42,8 +64,10 @@ router.get(
   authMiddleware,
   asyncHandler(async (req: AuthRequest, res) => {
     if (!req.user) throw new AppError('unauthorized', 401);
-    const all = await getAllBucketsWithMetrics();
-    res.json(filterByVisibility(req.user, all));
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    const all = await getAllBucketsWithMetrics(req.user.workspaceId, creds || undefined);
+    const visible = await filterByVisibility(req.user.workspaceId, req.user, all);
+    res.json(visible);
   })
 );
 
@@ -58,18 +82,23 @@ router.get(
     const bucketName = (req.params as any).name as string;
 
     if (req.user.role !== 'admin') {
-      const allowed = getAllowedBucketsForUser(req.user.sub);
+      const allowed = await getAllowedBucketsForUser(req.user.workspaceId, req.user.sub);
       if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(bucketName)) {
         throw new AppError('forbidden_bucket', 403);
       }
-      // No explicit allow-list: fall back to bucket-visibility rules.
       if (!Array.isArray(allowed) || allowed.length === 0) {
-        if (totalBucketAssignments() > 0) throw new AppError('forbidden_bucket', 403);
+        const assignmentCount = await totalBucketAssignments(req.user.workspaceId);
+        if (assignmentCount > 0) throw new AppError('forbidden_bucket', 403);
         if (config.isProd) throw new AppError('forbidden_bucket', 403);
       }
     }
 
-    const metrics = await getDetailedBucketMetrics(bucketName);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    const metrics = await getDetailedBucketMetrics(
+      req.user.workspaceId,
+      bucketName,
+      creds || undefined
+    );
     res.json(metrics);
   })
 );
@@ -79,24 +108,30 @@ router.get(
   authMiddleware,
   asyncHandler(async (req: AuthRequest, res) => {
     if (!req.user) throw new AppError('unauthorized', 401);
-    const all = await getAllBucketsWithMetrics();
-    const visible = filterByVisibility(req.user, all);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    const all = await getAllBucketsWithMetrics(req.user.workspaceId, creds || undefined);
+    const visible = await filterByVisibility(req.user.workspaceId, req.user, all);
 
     const totalStorage = visible.reduce((sum, b: any) => sum + (b.totalSize || 0), 0);
     const totalObjects = visible.reduce((sum, b: any) => sum + (b.objectCount || 0), 0);
 
-    // Run detailed-metric calls in parallel rather than sequentially.
     const detailedResults = await Promise.allSettled(
-      visible.map((b: any) => getDetailedBucketMetrics(b.name))
+      visible.map((b: any) =>
+        getDetailedBucketMetrics(req.user!.workspaceId, b.name, creds || undefined)
+      )
     );
 
     const storageClassBreakdown: Record<string, { size: number; count: number }> = {};
     for (const r of detailedResults) {
       if (r.status !== 'fulfilled') continue;
-      for (const sc of r.value.storageClasses || []) {
-        if (!storageClassBreakdown[sc.name]) storageClassBreakdown[sc.name] = { size: 0, count: 0 };
-        storageClassBreakdown[sc.name].size += sc.size;
-        storageClassBreakdown[sc.name].count += sc.count;
+      const value = r.value as any;
+      for (const sc of value.storageClasses || []) {
+        const key = typeof sc === 'string' ? sc : sc.name || 'unknown';
+        if (!storageClassBreakdown[key]) storageClassBreakdown[key] = { size: 0, count: 0 };
+        if (typeof sc === 'object' && sc.size) {
+          storageClassBreakdown[key].size += sc.size;
+          storageClassBreakdown[key].count += sc.count;
+        }
       }
     }
 
@@ -111,7 +146,7 @@ router.get(
         sizeFormatted: b.sizeFormatted,
         objects: b.objectCount,
       })),
-      storageClassBreakdown: Object.entries(storageClassBreakdown).map(([name, data]) => ({
+      storageClassBreakdown: (Object.entries(storageClassBreakdown) as Array<[string, { size: number; count: number }]>).map(([name, data]) => ({
         name,
         ...data,
         sizeFormatted: formatBytes(data.size),
@@ -134,12 +169,14 @@ router.get(
     const regions = regionsParam
       ? regionsParam.split(',').map((r) => r.trim()).filter(Boolean)
       : [];
-    let all = await getAllBucketsWithMetrics();
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    let all = await getAllBucketsWithMetrics(req.user.workspaceId, creds || undefined);
     if (regions.length > 0) {
       const set = new Set(regions);
       all = all.filter((m: any) => m.location && set.has(m.location));
     }
-    res.json(filterByVisibility(req.user, all));
+    const visible = await filterByVisibility(req.user.workspaceId, req.user, all);
+    res.json(visible);
   })
 );
 

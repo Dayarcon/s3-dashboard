@@ -181,6 +181,112 @@ export default function AuditPage() {
       </header>
 
       <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px' }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+          <h2 style={{ fontSize: '20px', fontWeight: 600, color: '#111827', margin: 0 }}>Audit Log</h2>
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => {
+                const menu = document.getElementById('export-menu');
+                if (menu) {
+                  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+                }
+              }}
+              style={{
+                padding: '8px 16px',
+                fontSize: '14px',
+                fontWeight: 500,
+                color: 'white',
+                backgroundColor: '#4f46e5',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#4338ca'}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#4f46e5'}
+            >
+              Export
+            </button>
+            <div id="export-menu" style={{
+              display: 'none',
+              position: 'absolute',
+              right: 0,
+              top: '100%',
+              marginTop: '4px',
+              backgroundColor: 'white',
+              border: '1px solid #d1d5db',
+              borderRadius: '6px',
+              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+              zIndex: 10
+            }}>
+              <button
+                onClick={() => {
+                  const content = JSON.stringify(logs, null, 2);
+                  const blob = new Blob([content], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `audit-export-${new Date().toISOString().slice(0, 10)}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  const menu = document.getElementById('export-menu');
+                  if (menu) menu.style.display = 'none';
+                }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '8px 16px',
+                  textAlign: 'left',
+                  border: 'none',
+                  backgroundColor: 'transparent',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  color: '#374151'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+              >
+                JSON
+              </button>
+              <button
+                onClick={() => {
+                  const headers = 'id,user,action,resource,details,created_at';
+                  const rows = logs.map(l =>
+                    [l.id, l.username ?? '', l.action, l.resource,
+                     JSON.stringify(l.details ?? '').replace(/"/g, '""'),
+                     l.created_at].map(v => `"${v}"`).join(',')
+                  );
+                  const content = [headers, ...rows].join('\n');
+                  const blob = new Blob([content], { type: 'text/csv' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `audit-export-${new Date().toISOString().slice(0, 10)}.csv`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  const menu = document.getElementById('export-menu');
+                  if (menu) menu.style.display = 'none';
+                }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '8px 16px',
+                  textAlign: 'left',
+                  border: 'none',
+                  backgroundColor: 'transparent',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  color: '#374151'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+              >
+                CSV
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* Filters */}
         <div style={{ backgroundColor: 'white', padding: '16px', borderRadius: '8px', marginBottom: '16px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>

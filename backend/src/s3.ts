@@ -10,51 +10,99 @@ import {
   HeadObjectCommand,
   GetBucketLocationCommand,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { config } from './config';
 import { formatBytes } from './utils';
 import { logger } from './logger';
 
-// Default client (fallback) - used for global operations like listBuckets
-export const defaultClient = new S3Client({ region: config.s3.defaultRegion });
+// Workspace-scoped client cache: key = "workspaceId:region"
+const clientCache = new Map<string, S3Client>();
 
-// us-east-1 client specifically for GetBucketLocation (AWS-recommended)
-const usEast1Client = new S3Client({ region: 'us-east-1' });
+// Workspace-scoped location cache: key = "workspaceId:bucket"
+type CacheEntry = { region: string; expiresAt: number };
+const locationCache = new Map<string, CacheEntry>();
 
-const regionClientCache = new Map<string, S3Client>();
+// Get or create S3 client for workspace + region
+// If credentials provided, create a new client; otherwise use default
+export function getClientForWorkspace(
+  workspaceId: number,
+  creds?: { accessKeyId: string; secretAccessKey: string },
+  region?: string
+): S3Client {
+  const clientRegion = region || config.s3.defaultRegion;
+  const cacheKey = `${workspaceId}:${clientRegion}`;
 
-export function getClientForRegion(region?: string): S3Client {
-  if (!region) return defaultClient;
-  if (!regionClientCache.has(region)) {
-    regionClientCache.set(region, new S3Client({ region }));
+  // If no credentials, return a client from cache
+  if (!creds) {
+    if (!clientCache.has(cacheKey)) {
+      clientCache.set(cacheKey, new S3Client({ region: clientRegion }));
+    }
+    return clientCache.get(cacheKey)!;
   }
-  return regionClientCache.get(region)!;
+
+  // If credentials provided, create a new client with those credentials
+  // Don't cache credential-based clients to avoid credential leakage across requests
+  return new S3Client({
+    region: clientRegion,
+    credentials: {
+      accessKeyId: creds.accessKeyId,
+      secretAccessKey: creds.secretAccessKey,
+    },
+  });
+}
+
+// Invalidate all cached clients for a workspace (e.g., after credential rotation)
+export function invalidateWorkspaceClients(workspaceId: number): void {
+  const keysToDelete: string[] = [];
+  for (const key of clientCache.keys()) {
+    if (key.startsWith(`${workspaceId}:`)) {
+      keysToDelete.push(key);
+    }
+  }
+  keysToDelete.forEach((key) => clientCache.delete(key));
+
+  // Also invalidate location cache for this workspace
+  const locKeysToDelete: string[] = [];
+  for (const key of locationCache.keys()) {
+    if (key.startsWith(`${workspaceId}:`)) {
+      locKeysToDelete.push(key);
+    }
+  }
+  locKeysToDelete.forEach((key) => locationCache.delete(key));
 }
 
 // ----- bucket location cache -----------------------------------------------
 // GetBucketLocation is rarely changing data and we hit it on every list/get/put.
-// Cache for the configured TTL (default 1 hour). Keyed by bucket name.
+// Cache for the configured TTL (default 1 hour). Keyed by "workspaceId:bucket".
 
-type CacheEntry = { region: string; expiresAt: number };
-const locationCache = new Map<string, CacheEntry>();
-
-export function invalidateBucketLocation(bucket: string) {
-  locationCache.delete(bucket);
+export function invalidateBucketLocation(workspaceId: number, bucket: string): void {
+  locationCache.delete(`${workspaceId}:${bucket}`);
 }
 
-async function fetchBucketLocation(bucket: string): Promise<string> {
+async function fetchBucketLocation(
+  workspaceId: number,
+  bucket: string,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+): Promise<string> {
+  // Use us-east-1 client for GetBucketLocation (AWS-recommended)
+  const client = getClientForWorkspace(workspaceId, creds, 'us-east-1');
   const cmd = new GetBucketLocationCommand({ Bucket: bucket });
-  const res = await usEast1Client.send(cmd);
-  // us-east-1 returns null per AWS contract.
+  const res = await client.send(cmd);
   return (res.LocationConstraint as string | null) || 'us-east-1';
 }
 
-export async function getBucketLocation(bucket: string): Promise<string> {
+export async function getBucketLocation(
+  workspaceId: number,
+  bucket: string,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+): Promise<string> {
+  const cacheKey = `${workspaceId}:${bucket}`;
   const now = Date.now();
-  const cached = locationCache.get(bucket);
+  const cached = locationCache.get(cacheKey);
   if (cached && cached.expiresAt > now) return cached.region;
   try {
-    const region = await fetchBucketLocation(bucket);
-    locationCache.set(bucket, {
+    const region = await fetchBucketLocation(workspaceId, bucket, creds);
+    locationCache.set(cacheKey, {
       region,
       expiresAt: now + config.s3.bucketLocationCacheTtlMs,
     });
@@ -75,18 +123,25 @@ async function streamToString(stream: any) {
 
 // ----- buckets --------------------------------------------------------------
 
-export async function listBuckets() {
+export async function listBuckets(
+  workspaceId: number,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+) {
+  const client = getClientForWorkspace(workspaceId, creds);
   const cmd = new ListBucketsCommand({});
-  const res = await defaultClient.send(cmd);
+  const res = await client.send(cmd);
   return (res.Buckets || []).map((b) => ({ name: b.Name, creationDate: b.CreationDate }));
 }
 
-export async function listBucketsWithRegion() {
-  const buckets = await listBuckets();
+export async function listBucketsWithRegion(
+  workspaceId: number,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+) {
+  const buckets = await listBuckets(workspaceId, creds);
   const enriched = await Promise.all(
     buckets.map(async (b) => {
       try {
-        const location = await getBucketLocation(b.name!);
+        const location = await getBucketLocation(workspaceId, b.name!, creds);
         return { ...b, region: location };
       } catch (err: any) {
         const errorCode = err?.Code || err?.code || err?.name || 'UnknownError';
@@ -104,8 +159,12 @@ export async function listBucketsWithRegion() {
   return enriched;
 }
 
-export async function listBucketsByRegions(regions?: string[]) {
-  const enriched = await listBucketsWithRegion();
+export async function listBucketsByRegions(
+  workspaceId: number,
+  creds?: { accessKeyId: string; secretAccessKey: string },
+  regions?: string[]
+) {
+  const enriched = await listBucketsWithRegion(workspaceId, creds);
   if (!regions || regions.length === 0) return enriched;
   const regionSet = new Set(regions);
   return enriched.filter((b) => b.region && regionSet.has(b.region));
@@ -113,18 +172,16 @@ export async function listBucketsByRegions(regions?: string[]) {
 
 // ----- objects --------------------------------------------------------------
 
-/**
- * List a single page at the given prefix. Pagination is exposed via
- * continuationToken in/out, so the UI can fetch additional pages when needed.
- */
 export async function listAtPrefix(
+  workspaceId: number,
   bucket: string,
+  creds?: { accessKeyId: string; secretAccessKey: string },
   prefix = '',
   opts: { maxKeys?: number; continuationToken?: string } = {}
 ) {
   const maxKeys = Math.min(Math.max(opts.maxKeys ?? 1000, 1), 1000);
-  const bucketRegion = await getBucketLocation(bucket);
-  const client = getClientForRegion(bucketRegion);
+  const bucketRegion = await getBucketLocation(workspaceId, bucket, creds);
+  const client = getClientForWorkspace(workspaceId, creds, bucketRegion);
   const params: any = {
     Bucket: bucket,
     Prefix: prefix,
@@ -146,17 +203,27 @@ export async function listAtPrefix(
   };
 }
 
-export async function getObjectContent(bucket: string, key: string) {
-  const bucketRegion = await getBucketLocation(bucket);
-  const client = getClientForRegion(bucketRegion);
+export async function getObjectContent(
+  workspaceId: number,
+  bucket: string,
+  key: string,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+) {
+  const bucketRegion = await getBucketLocation(workspaceId, bucket, creds);
+  const client = getClientForWorkspace(workspaceId, creds, bucketRegion);
   const cmd = new GetObjectCommand({ Bucket: bucket, Key: key });
   const res = await client.send(cmd);
   return await streamToString(res.Body);
 }
 
-export async function getObjectMetadata(bucket: string, key: string) {
-  const bucketRegion = await getBucketLocation(bucket);
-  const client = getClientForRegion(bucketRegion);
+export async function getObjectMetadata(
+  workspaceId: number,
+  bucket: string,
+  key: string,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+) {
+  const bucketRegion = await getBucketLocation(workspaceId, bucket, creds);
+  const client = getClientForWorkspace(workspaceId, creds, bucketRegion);
   const cmd = new HeadObjectCommand({ Bucket: bucket, Key: key });
   const res = await client.send(cmd);
   return {
@@ -169,23 +236,39 @@ export async function getObjectMetadata(bucket: string, key: string) {
   };
 }
 
-export async function putObjectContent(bucket: string, key: string, body: string) {
-  const bucketRegion = await getBucketLocation(bucket);
-  const client = getClientForRegion(bucketRegion);
+export async function putObjectContent(
+  workspaceId: number,
+  bucket: string,
+  key: string,
+  body: string,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+) {
+  const bucketRegion = await getBucketLocation(workspaceId, bucket, creds);
+  const client = getClientForWorkspace(workspaceId, creds, bucketRegion);
   const cmd = new PutObjectCommand({ Bucket: bucket, Key: key, Body: body });
   await client.send(cmd);
 }
 
-export async function deleteObject(bucket: string, key: string) {
-  const bucketRegion = await getBucketLocation(bucket);
-  const client = getClientForRegion(bucketRegion);
+export async function deleteObject(
+  workspaceId: number,
+  bucket: string,
+  key: string,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+) {
+  const bucketRegion = await getBucketLocation(workspaceId, bucket, creds);
+  const client = getClientForWorkspace(workspaceId, creds, bucketRegion);
   const cmd = new DeleteObjectCommand({ Bucket: bucket, Key: key });
   await client.send(cmd);
 }
 
-export async function deleteObjects(bucket: string, keys: string[]) {
-  const bucketRegion = await getBucketLocation(bucket);
-  const client = getClientForRegion(bucketRegion);
+export async function deleteObjects(
+  workspaceId: number,
+  bucket: string,
+  keys: string[],
+  creds?: { accessKeyId: string; secretAccessKey: string }
+) {
+  const bucketRegion = await getBucketLocation(workspaceId, bucket, creds);
+  const client = getClientForWorkspace(workspaceId, creds, bucketRegion);
   const cmd = new DeleteObjectsCommand({
     Bucket: bucket,
     Delete: { Objects: keys.map((key) => ({ Key: key })) },
@@ -197,9 +280,15 @@ export async function deleteObjects(bucket: string, keys: string[]) {
   };
 }
 
-export async function copyObject(bucket: string, sourceKey: string, destKey: string) {
-  const bucketRegion = await getBucketLocation(bucket);
-  const client = getClientForRegion(bucketRegion);
+export async function copyObject(
+  workspaceId: number,
+  bucket: string,
+  sourceKey: string,
+  destKey: string,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+) {
+  const bucketRegion = await getBucketLocation(workspaceId, bucket, creds);
+  const client = getClientForWorkspace(workspaceId, creds, bucketRegion);
   const cmd = new CopyObjectCommand({
     Bucket: bucket,
     CopySource: `${bucket}/${encodeURIComponent(sourceKey)}`,
@@ -208,24 +297,39 @@ export async function copyObject(bucket: string, sourceKey: string, destKey: str
   await client.send(cmd);
 }
 
-export async function moveObject(bucket: string, sourceKey: string, destKey: string) {
-  await copyObject(bucket, sourceKey, destKey);
-  await deleteObject(bucket, sourceKey);
+export async function moveObject(
+  workspaceId: number,
+  bucket: string,
+  sourceKey: string,
+  destKey: string,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+) {
+  await copyObject(workspaceId, bucket, sourceKey, destKey, creds);
+  await deleteObject(workspaceId, bucket, sourceKey, creds);
 }
 
-export async function createFolder(bucket: string, folderPath: string) {
+export async function createFolder(
+  workspaceId: number,
+  bucket: string,
+  folderPath: string,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+) {
   const folderKey = folderPath.endsWith('/') ? folderPath : `${folderPath}/`;
-  const bucketRegion = await getBucketLocation(bucket);
-  const client = getClientForRegion(bucketRegion);
+  const bucketRegion = await getBucketLocation(workspaceId, bucket, creds);
+  const client = getClientForWorkspace(workspaceId, creds, bucketRegion);
   const cmd = new PutObjectCommand({ Bucket: bucket, Key: folderKey, Body: '' });
   await client.send(cmd);
 }
 
 // ----- metrics --------------------------------------------------------------
 
-export async function getBucketMetrics(bucket: string) {
-  const bucketRegion = await getBucketLocation(bucket);
-  const client = getClientForRegion(bucketRegion);
+export async function getBucketMetrics(
+  workspaceId: number,
+  bucket: string,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+) {
+  const bucketRegion = await getBucketLocation(workspaceId, bucket, creds);
+  const client = getClientForWorkspace(workspaceId, creds, bucketRegion);
 
   let totalSize = 0;
   let objectCount = 0;
@@ -252,14 +356,17 @@ export async function getBucketMetrics(bucket: string) {
   };
 }
 
-export async function getAllBucketsWithMetrics() {
-  const buckets = await listBuckets();
+export async function getAllBucketsWithMetrics(
+  workspaceId: number,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+) {
+  const buckets = await listBuckets(workspaceId, creds);
 
   const results = await Promise.allSettled(
     buckets.map(async (bucket) => {
       const [metrics, location] = await Promise.all([
-        getBucketMetrics(bucket.name!),
-        getBucketLocation(bucket.name!),
+        getBucketMetrics(workspaceId, bucket.name!, creds),
+        getBucketLocation(workspaceId, bucket.name!, creds),
       ]);
       return { ...bucket, ...metrics, location };
     })
@@ -284,9 +391,13 @@ export async function getAllBucketsWithMetrics() {
   });
 }
 
-export async function getDetailedBucketMetrics(bucket: string) {
-  const bucketRegion = await getBucketLocation(bucket);
-  const client = getClientForRegion(bucketRegion);
+export async function getDetailedBucketMetrics(
+  workspaceId: number,
+  bucket: string,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+) {
+  const bucketRegion = await getBucketLocation(workspaceId, bucket, creds);
+  const client = getClientForWorkspace(workspaceId, creds, bucketRegion);
 
   let totalSize = 0;
   let objectCount = 0;
@@ -302,22 +413,27 @@ export async function getDetailedBucketMetrics(bucket: string) {
       ContinuationToken: continuationToken,
     });
     const res = await client.send(cmd);
-
     for (const obj of res.Contents || []) {
-      const size = obj.Size || 0;
-      totalSize += size;
+      totalSize += obj.Size || 0;
       objectCount++;
 
+      // Track storage class
       const storageClass = obj.StorageClass || 'STANDARD';
-      if (!storageClasses[storageClass]) storageClasses[storageClass] = { size: 0, count: 0 };
-      storageClasses[storageClass].size += size;
+      if (!storageClasses[storageClass]) {
+        storageClasses[storageClass] = { size: 0, count: 0 };
+      }
+      storageClasses[storageClass].size += obj.Size || 0;
       storageClasses[storageClass].count++;
 
-      const ext = obj.Key?.split('.').pop()?.toLowerCase() || 'no_extension';
-      if (!extensions[ext]) extensions[ext] = { size: 0, count: 0 };
-      extensions[ext].size += size;
+      // Track extensions
+      const ext = obj.Key?.split('.').pop() || 'no-ext';
+      if (!extensions[ext]) {
+        extensions[ext] = { size: 0, count: 0 };
+      }
+      extensions[ext].size += obj.Size || 0;
       extensions[ext].count++;
 
+      // Track oldest/newest
       if (obj.LastModified) {
         if (!lastModifiedOldest || obj.LastModified < lastModifiedOldest) {
           lastModifiedOldest = obj.LastModified;
@@ -327,7 +443,6 @@ export async function getDetailedBucketMetrics(bucket: string) {
         }
       }
     }
-
     continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined;
   } while (continuationToken);
 
@@ -336,20 +451,30 @@ export async function getDetailedBucketMetrics(bucket: string) {
     totalSize,
     objectCount,
     sizeFormatted: formatBytes(totalSize),
-    storageClasses: Object.entries(storageClasses).map(([name, data]) => ({
-      name,
-      ...data,
-      sizeFormatted: formatBytes(data.size),
-    })),
-    topExtensions: Object.entries(extensions)
-      .map(([ext, data]) => ({ ext, ...data, sizeFormatted: formatBytes(data.size) }))
-      .sort((a, b) => b.size - a.size)
-      .slice(0, 10),
-    oldestObject: lastModifiedOldest,
-    newestObject: lastModifiedNewest,
-    avgObjectSize: objectCount > 0 ? Math.round(totalSize / objectCount) : 0,
-    avgObjectSizeFormatted: formatBytes(
-      objectCount > 0 ? Math.round(totalSize / objectCount) : 0
-    ),
+    storageClasses,
+    extensions,
+    lastModifiedOldest,
+    lastModifiedNewest,
   };
+}
+
+// ----- presigned URLs -------------------------------------------------------
+
+export async function generatePresignedUrl(
+  workspaceId: number,
+  bucket: string,
+  key: string,
+  expiresIn: number,
+  creds?: { accessKeyId: string; secretAccessKey: string }
+): Promise<string> {
+  const bucketRegion = await getBucketLocation(workspaceId, bucket, creds);
+  const client = getClientForWorkspace(workspaceId, creds, bucketRegion);
+  const cmd = new GetObjectCommand({ Bucket: bucket, Key: key });
+  try {
+    const url = await getSignedUrl(client, cmd, { expiresIn });
+    return url;
+  } catch (err: any) {
+    logger.error({ bucket, key, err: err?.message || err }, 'generatePresignedUrl_failed');
+    throw err;
+  }
 }

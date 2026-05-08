@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import { config } from '../config';
 
 export interface AuthRequest extends Request {
-  user?: { sub: number; username: string; role: string };
+  user?: { sub: number; username: string; role: string; workspaceId: number };
 }
 
 export function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
@@ -13,7 +13,12 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
   const token = h.slice('Bearer '.length);
   try {
     const payload = jwt.verify(token, config.jwtSecret) as any;
-    req.user = { sub: payload.sub, username: payload.username, role: payload.role };
+    req.user = {
+      sub: payload.sub,
+      username: payload.username,
+      role: payload.role,
+      workspaceId: payload.workspaceId,
+    };
     next();
   } catch (e) {
     return res.status(401).json({ error: 'invalid_token' });

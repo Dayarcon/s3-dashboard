@@ -5,6 +5,10 @@ export function getToken() {
   return typeof window !== 'undefined' ? localStorage.getItem('s3dash_token') : null;
 }
 
+export function getWorkspaceId() {
+  return typeof window !== 'undefined' ? localStorage.getItem('s3dash_workspace_id') : null;
+}
+
 export function getUser() {
   const t = typeof window !== 'undefined' ? localStorage.getItem('s3dash_user') : null;
   return t ? JSON.parse(t) : null;
@@ -14,6 +18,7 @@ export function logout() {
   if (typeof window !== 'undefined') {
     localStorage.removeItem('s3dash_token');
     localStorage.removeItem('s3dash_user');
+    localStorage.removeItem('s3dash_workspace_id');
   }
 }
 

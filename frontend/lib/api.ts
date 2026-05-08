@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { axiosWithAuth, logout } from './auth';
 
 export async function getGroups() {
@@ -159,5 +160,47 @@ export async function getBucketMetrics() {
   export async function getStorageSummary() {
     const api = axiosWithAuth();
     const res = await api.get('/api/metrics/summary');
+    return res.data;
+  }
+
+  // Workspace APIs
+  export async function connectAWSCredentials(accessKeyId: string, secretAccessKey: string, region: string = 'us-east-1') {
+    const api = axiosWithAuth();
+    const res = await api.post('/api/workspace/credentials', {
+      accessKeyId,
+      secretAccessKey,
+      region,
+    });
+    return res.data;
+  }
+
+  export async function inviteUser(role: 'admin' | 'member' = 'member') {
+    const api = axiosWithAuth();
+    const res = await api.post('/api/workspace/invite', { role });
+    return res.data;
+  }
+
+  export async function validateInviteCode(code: string) {
+    const api = axios.create({ baseURL: process.env.NEXT_PUBLIC_BACKEND_URL });
+    const res = await api.get(`/api/workspace/invite/${code}`);
+    return res.data;
+  }
+
+  export async function joinWorkspace(code: string, username: string, password: string) {
+    const api = axios.create({ baseURL: process.env.NEXT_PUBLIC_BACKEND_URL });
+    const res = await api.post('/auth/join', { code, username, password });
+    return res.data;
+  }
+
+  // Auth APIs
+  export async function signupWorkspace(workspaceName: string, username: string, password: string) {
+    const api = axios.create({ baseURL: process.env.NEXT_PUBLIC_BACKEND_URL });
+    const res = await api.post('/auth/signup', { workspaceName, username, password });
+    return res.data;
+  }
+
+  export async function login(username: string, password: string) {
+    const api = axios.create({ baseURL: process.env.NEXT_PUBLIC_BACKEND_URL });
+    const res = await api.post('/auth/login', { username, password });
     return res.data;
   }

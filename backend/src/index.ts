@@ -44,6 +44,7 @@ import {
   insertAudit,
   totalBucketAssignments,
   db,
+  runMigrations,
 } from './db';
 import { authMiddleware, AuthRequest } from './middleware/authMiddleware';
 import { permissionMiddleware } from './middleware/permissionMiddleware';
@@ -110,9 +111,16 @@ app.use('/auth/login', loginLimiter);
 
 // --- startup tasks ----------------------------------------------------------
 
-ensureSuperAdminFromEnv().catch((err) =>
-  logger.error({ err }, 'failed_to_create_super_admin')
-);
+// Run database migrations
+runMigrations().catch((err) => {
+  logger.error({ err }, 'failed_to_run_migrations');
+  process.exit(1);
+});
+
+// Multi-tenant: no super admin from env
+// ensureSuperAdminFromEnv().catch((err) =>
+//   logger.error({ err }, 'failed_to_create_super_admin')
+// );
 startLockoutGc();
 
 // Periodically clean up stale upload sessions (every 30 min, drop sessions older than 24h).
