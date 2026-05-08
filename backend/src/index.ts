@@ -29,7 +29,7 @@ import {
   moveObject,
   getObjectMetadata,
   createFolder,
-  getClientForRegion,
+  getClientForWorkspace,
   getBucketLocation,
 } from './s3';
 
@@ -39,13 +39,14 @@ import userRoutes from './users';
 import auditRoutes from './audit';
 import metricsRoutes from './metrics';
 import {
-  ensureSuperAdminFromEnv,
   getAllowedBucketsForUser,
   insertAudit,
   totalBucketAssignments,
-  db,
   runMigrations,
+  getWorkspace,
+  pool,
 } from './db';
+import { decrypt } from './crypto';
 import { authMiddleware, AuthRequest } from './middleware/authMiddleware';
 import { permissionMiddleware } from './middleware/permissionMiddleware';
 import { startLockoutGc } from './loginLockout';
@@ -109,6 +110,26 @@ const loginLimiter = rateLimit({
 app.use(globalLimiter);
 app.use('/auth/login', loginLimiter);
 
+// --- helpers ----------------------------------------------------------------
+
+async function getWorkspaceCreds(workspaceId: number) {
+  const workspace = await getWorkspace(workspaceId);
+  if (!workspace || !workspace.aws_access_key_enc || !workspace.aws_secret_key_enc) {
+    return null;
+  }
+  try {
+    const accessKeyId = decrypt(workspace.aws_access_key_enc, config.credentials.encryptionKey);
+    const secretAccessKey = decrypt(workspace.aws_secret_key_enc, config.credentials.encryptionKey);
+    return {
+      accessKeyId,
+      secretAccessKey,
+      region: workspace.aws_region || config.s3.defaultRegion,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // --- startup tasks ----------------------------------------------------------
 
 // Run database migrations
@@ -138,26 +159,29 @@ app.use('/api/users', userRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/metrics', metricsRoutes);
 
-app.get('/api/health', (_req, res) => {
-  try {
-    db.prepare('SELECT 1').get();
-    res.json({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      database: 'connected',
-    });
-  } catch (err: any) {
-    logger.error({ err }, 'health_check_failed');
-    res.status(503).json({ status: 'unhealthy' });
-  }
-});
+app.get(
+  '/api/health',
+  asyncHandler(async (_req, res) => {
+    try {
+      await pool.query('SELECT 1');
+      res.json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        database: 'connected',
+      });
+    } catch (err: any) {
+      logger.error({ err }, 'health_check_failed');
+      res.status(503).json({ status: 'unhealthy' });
+    }
+  })
+);
 
 // /api/ready also checks S3 reachability — slower, used by orchestrators.
 app.get(
   '/api/ready',
   asyncHandler(async (_req, res) => {
-    db.prepare('SELECT 1').get();
-    await listBucketsWithRegion(); // hits AWS at least to ListBuckets
+    await pool.query('SELECT 1');
+    // Note: /api/ready skips S3 check as it requires auth and workspace context
     res.json({ status: 'ready' });
   })
 );
@@ -167,8 +191,11 @@ app.get(
 app.get(
   '/api/regions',
   authMiddleware,
-  asyncHandler(async (_req, res) => {
-    const buckets = await listBucketsWithRegion();
+  asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    const buckets = await listBucketsWithRegion(req.user.workspaceId, creds);
     const regions = [...new Set(buckets.map((b) => b.region).filter(Boolean))].sort();
     const allAwsRegions = [
       'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
@@ -191,11 +218,11 @@ app.get(
  * Throws AppError if the given user is not allowed to see this bucket.
  * Centralizes the rule used in /api/buckets and per-object endpoints.
  */
-function ensureBucketAllowed(req: AuthRequest, bucket: string) {
+async function ensureBucketAllowed(req: AuthRequest, bucket: string) {
   if (!req.user) throw new AppError('unauthorized', 401);
   if (req.user.role === 'admin') return;
 
-  const allowed = getAllowedBucketsForUser(req.user.sub);
+  const allowed = await getAllowedBucketsForUser(req.user.workspaceId, req.user.sub);
   if (Array.isArray(allowed) && allowed.length > 0) {
     if (!allowed.includes(bucket)) throw new AppError('forbidden_bucket', 403);
     return;
@@ -204,7 +231,8 @@ function ensureBucketAllowed(req: AuthRequest, bucket: string) {
   // No assignments for this user. If any assignments exist anywhere, deny.
   // If zero assignments exist anywhere: deny in production (default-deny),
   // permissive in dev so a bare bootstrap install is usable.
-  if (totalBucketAssignments() > 0 || config.isProd) {
+  const total = await totalBucketAssignments(req.user.workspaceId);
+  if (total > 0 || config.isProd) {
     throw new AppError('forbidden_bucket', 403);
   }
 }
@@ -218,7 +246,10 @@ app.get(
   authMiddleware,
   validate(bucketsQuerySchema, 'query'),
   asyncHandler(async (req: AuthRequest, res) => {
-    const buckets = await listBucketsWithRegion();
+    if (!req.user) throw new AppError('unauthorized', 401);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    const buckets = await listBucketsWithRegion(req.user.workspaceId, creds);
     const regionsParam = (req.query as any).regions as string | undefined;
     const regionFilter = regionsParam
       ? regionsParam.split(',').map((r) => r.trim()).filter(Boolean)
@@ -227,15 +258,15 @@ app.get(
       ? buckets.filter((b) => regionFilter.includes(b.region!))
       : buckets;
 
-    if (!req.user) throw new AppError('unauthorized', 401);
     if (req.user.role === 'admin') return res.json(visible);
 
-    const allowed = getAllowedBucketsForUser(req.user.sub);
+    const allowed = await getAllowedBucketsForUser(req.user.workspaceId, req.user.sub);
     if (Array.isArray(allowed) && allowed.length > 0) {
       return res.json(visible.filter((b: any) => allowed.includes(b.name)));
     }
 
-    if (totalBucketAssignments() > 0) return res.json([]);
+    const total = await totalBucketAssignments(req.user.workspaceId);
+    if (total > 0) return res.json([]);
     if (config.isProd) return res.json([]);
     res.json(visible);
   })
@@ -255,13 +286,16 @@ app.get(
   authMiddleware,
   validate(listSchema, 'query'),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const q = req.query as unknown as z.infer<typeof listSchema>;
-    ensureBucketAllowed(req, q.bucket);
-    const data = await listAtPrefix(q.bucket, q.prefix, {
+    await ensureBucketAllowed(req, q.bucket);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    const data = await listAtPrefix(req.user.workspaceId, q.bucket, creds, q.prefix, {
       continuationToken: q.continuationToken,
       maxKeys: q.maxKeys,
     });
-    insertAudit(req.user?.sub ?? null, 'list', `bucket:${q.bucket}`, { prefix: q.prefix });
+    await insertAudit(req.user.workspaceId, req.user.sub, 'list', `bucket:${q.bucket}`, { prefix: q.prefix });
     res.json(data);
   })
 );
@@ -276,11 +310,14 @@ app.get(
   authMiddleware,
   validate(keyQuerySchema, 'query'),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const { bucket, key } = req.query as unknown as z.infer<typeof keyQuerySchema>;
-    ensureBucketAllowed(req, bucket);
+    await ensureBucketAllowed(req, bucket);
 
-    const region = await getBucketLocation(bucket);
-    const s3Client = getClientForRegion(region);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    const region = await getBucketLocation(req.user.workspaceId, bucket, creds);
+    const s3Client = getClientForWorkspace(req.user.workspaceId, creds, region);
 
     const { HeadObjectCommand, GetObjectCommand } = await import('@aws-sdk/client-s3');
     const headRes = await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
@@ -310,7 +347,7 @@ app.get(
       res.end();
     }
 
-    insertAudit(req.user?.sub ?? null, 'get_file', `bucket:${bucket}`, { key });
+    await insertAudit(req.user.workspaceId, req.user.sub, 'get_file', `bucket:${bucket}`, { key });
   })
 );
 
@@ -319,11 +356,14 @@ app.get(
   authMiddleware,
   validate(keyQuerySchema, 'query'),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const { bucket, key } = req.query as unknown as z.infer<typeof keyQuerySchema>;
-    ensureBucketAllowed(req, bucket);
+    await ensureBucketAllowed(req, bucket);
 
-    const region = await getBucketLocation(bucket);
-    const s3Client = getClientForRegion(region);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    const region = await getBucketLocation(req.user.workspaceId, bucket, creds);
+    const s3Client = getClientForWorkspace(req.user.workspaceId, creds, region);
     const { GetObjectCommand } = await import('@aws-sdk/client-s3');
     const response = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
 
@@ -336,7 +376,7 @@ app.get(
       res.end();
     }
 
-    insertAudit(req.user?.sub ?? null, 'download_file', `bucket:${bucket}`, { key });
+    await insertAudit(req.user.workspaceId, req.user.sub, 'download_file', `bucket:${bucket}`, { key });
   })
 );
 
@@ -352,10 +392,13 @@ app.put(
   permissionMiddleware('file', 'write'),
   validate(putFileSchema),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const { bucket, key, content } = req.body as z.infer<typeof putFileSchema>;
-    ensureBucketAllowed(req, bucket);
-    await putObjectContent(bucket, key, content);
-    insertAudit(req.user?.sub ?? null, 'put_file', `bucket:${bucket}`, { key });
+    await ensureBucketAllowed(req, bucket);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    await putObjectContent(req.user.workspaceId, bucket, key, content, creds);
+    await insertAudit(req.user.workspaceId, req.user.sub, 'put_file', `bucket:${bucket}`, { key });
     res.json({ ok: true });
   })
 );
@@ -371,10 +414,13 @@ app.delete(
   permissionMiddleware('file', 'write'),
   validate(deleteFileSchema),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const { bucket, key } = req.body as z.infer<typeof deleteFileSchema>;
-    ensureBucketAllowed(req, bucket);
-    await deleteObject(bucket, key);
-    insertAudit(req.user?.sub ?? null, 'delete_file', `bucket:${bucket}`, { key });
+    await ensureBucketAllowed(req, bucket);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    await deleteObject(req.user.workspaceId, bucket, key, creds);
+    await insertAudit(req.user.workspaceId, req.user.sub, 'delete_file', `bucket:${bucket}`, { key });
     res.json({ ok: true });
   })
 );
@@ -390,10 +436,13 @@ app.post(
   permissionMiddleware('file', 'write'),
   validate(bulkDeleteSchema),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const { bucket, keys } = req.body as z.infer<typeof bulkDeleteSchema>;
-    ensureBucketAllowed(req, bucket);
-    const result = await deleteObjects(bucket, keys);
-    insertAudit(req.user?.sub ?? null, 'bulk_delete', `bucket:${bucket}`, { keys });
+    await ensureBucketAllowed(req, bucket);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    const result = await deleteObjects(req.user.workspaceId, bucket, keys, creds);
+    await insertAudit(req.user.workspaceId, req.user.sub, 'bulk_delete', `bucket:${bucket}`, { keys });
     res.json(result);
   })
 );
@@ -410,10 +459,13 @@ app.post(
   permissionMiddleware('file', 'write'),
   validate(copyMoveSchema),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const { bucket, sourceKey, destKey } = req.body as z.infer<typeof copyMoveSchema>;
-    ensureBucketAllowed(req, bucket);
-    await copyObject(bucket, sourceKey, destKey);
-    insertAudit(req.user?.sub ?? null, 'copy_file', `bucket:${bucket}`, { sourceKey, destKey });
+    await ensureBucketAllowed(req, bucket);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    await copyObject(req.user.workspaceId, bucket, sourceKey, destKey, creds);
+    await insertAudit(req.user.workspaceId, req.user.sub, 'copy_file', `bucket:${bucket}`, { sourceKey, destKey });
     res.json({ ok: true });
   })
 );
@@ -424,10 +476,13 @@ app.post(
   permissionMiddleware('file', 'write'),
   validate(copyMoveSchema),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const { bucket, sourceKey, destKey } = req.body as z.infer<typeof copyMoveSchema>;
-    ensureBucketAllowed(req, bucket);
-    await moveObject(bucket, sourceKey, destKey);
-    insertAudit(req.user?.sub ?? null, 'move_file', `bucket:${bucket}`, { sourceKey, destKey });
+    await ensureBucketAllowed(req, bucket);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    await moveObject(req.user.workspaceId, bucket, sourceKey, destKey, creds);
+    await insertAudit(req.user.workspaceId, req.user.sub, 'move_file', `bucket:${bucket}`, { sourceKey, destKey });
     res.json({ ok: true });
   })
 );
@@ -437,10 +492,13 @@ app.get(
   authMiddleware,
   validate(keyQuerySchema, 'query'),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const { bucket, key } = req.query as unknown as z.infer<typeof keyQuerySchema>;
-    ensureBucketAllowed(req, bucket);
-    const metadata = await getObjectMetadata(bucket, key);
-    insertAudit(req.user?.sub ?? null, 'file_info', `bucket:${bucket}`, { key });
+    await ensureBucketAllowed(req, bucket);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    const metadata = await getObjectMetadata(req.user.workspaceId, bucket, key, creds);
+    await insertAudit(req.user.workspaceId, req.user.sub, 'file_info', `bucket:${bucket}`, { key });
     res.json(metadata);
   })
 );
@@ -452,14 +510,17 @@ app.post(
   permissionMiddleware('file', 'write'),
   upload.single('file'),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     if (!req.file) throw new AppError('no_file_uploaded', 400);
     const { bucket, key } = req.body as { bucket?: string; key?: string };
     if (!bucket || !key) throw new AppError('missing_params', 400);
-    ensureBucketAllowed(req, bucket);
+    await ensureBucketAllowed(req, bucket);
 
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
     const { PutObjectCommand } = await import('@aws-sdk/client-s3');
-    const region = await getBucketLocation(bucket);
-    const s3Client = getClientForRegion(region);
+    const region = await getBucketLocation(req.user.workspaceId, bucket, creds);
+    const s3Client = getClientForWorkspace(req.user.workspaceId, creds, region);
     await s3Client.send(
       new PutObjectCommand({
         Bucket: bucket,
@@ -468,7 +529,7 @@ app.post(
         ContentType: req.file.mimetype,
       })
     );
-    insertAudit(req.user?.sub ?? null, 'upload_file', `bucket:${bucket}`, { key });
+    await insertAudit(req.user.workspaceId, req.user.sub, 'upload_file', `bucket:${bucket}`, { key });
     res.json({ ok: true, key, size: req.file.size });
   })
 );
@@ -484,10 +545,13 @@ app.post(
   permissionMiddleware('folder', 'write'),
   validate(folderSchema),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const { bucket, folderPath } = req.body as z.infer<typeof folderSchema>;
-    ensureBucketAllowed(req, bucket);
-    await createFolder(bucket, folderPath);
-    insertAudit(req.user?.sub ?? null, 'create_folder', `bucket:${bucket}`, { folderPath });
+    await ensureBucketAllowed(req, bucket);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    await createFolder(req.user.workspaceId, bucket, folderPath, creds);
+    await insertAudit(req.user.workspaceId, req.user.sub, 'create_folder', `bucket:${bucket}`, { folderPath });
     res.json({ ok: true, folderPath });
   })
 );
@@ -498,11 +562,14 @@ app.delete(
   permissionMiddleware('folder', 'write'),
   validate(folderSchema),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const { bucket, folderPath } = req.body as z.infer<typeof folderSchema>;
-    ensureBucketAllowed(req, bucket);
+    await ensureBucketAllowed(req, bucket);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
     const folderKey = folderPath.endsWith('/') ? folderPath : `${folderPath}/`;
-    await deleteObject(bucket, folderKey);
-    insertAudit(req.user?.sub ?? null, 'delete_folder', `bucket:${bucket}`, { folderKey });
+    await deleteObject(req.user.workspaceId, bucket, folderKey, creds);
+    await insertAudit(req.user.workspaceId, req.user.sub, 'delete_folder', `bucket:${bucket}`, { folderKey });
     res.json({ ok: true });
   })
 );
@@ -521,11 +588,14 @@ app.post(
   authMiddleware,
   validate(initiateSchema),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const { bucket, key, contentType, fileSize } = req.body as z.infer<typeof initiateSchema>;
-    ensureBucketAllowed(req, bucket);
+    await ensureBucketAllowed(req, bucket);
 
-    const region = await getBucketLocation(bucket);
-    const s3Client = getClientForRegion(region);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    const region = await getBucketLocation(req.user.workspaceId, bucket, creds);
+    const s3Client = getClientForWorkspace(req.user.workspaceId, creds, region);
     const { CreateMultipartUploadCommand } = await import('@aws-sdk/client-s3');
     const response = await s3Client.send(
       new CreateMultipartUploadCommand({
@@ -535,11 +605,12 @@ app.post(
       })
     );
     const uploadId = response.UploadId!;
-    createSession({
+    await createSession({
       uploadId,
+      workspaceId: req.user.workspaceId,
       bucket,
       key,
-      userId: req.user?.sub ?? null,
+      userId: req.user.sub,
       totalBytes: fileSize || 0,
     });
     res.json({ ok: true, uploadId, key, bucket });
@@ -559,13 +630,16 @@ app.post(
   authMiddleware,
   validate(uploadPartSchema),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const { bucket, key, uploadId, partNumber, data } = req.body as z.infer<
       typeof uploadPartSchema
     >;
-    ensureBucketAllowed(req, bucket);
+    await ensureBucketAllowed(req, bucket);
 
-    const region = await getBucketLocation(bucket);
-    const s3Client = getClientForRegion(region);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    const region = await getBucketLocation(req.user.workspaceId, bucket, creds);
+    const s3Client = getClientForWorkspace(req.user.workspaceId, creds, region);
     const { UploadPartCommand } = await import('@aws-sdk/client-s3');
     const partBuffer = Buffer.from(data, 'base64');
     const response = await s3Client.send(
@@ -577,7 +651,7 @@ app.post(
         Body: partBuffer,
       })
     );
-    recordPart(uploadId, { PartNumber: partNumber, ETag: response.ETag! }, partBuffer.byteLength);
+    await recordPart(uploadId, partNumber, response.ETag!);
     res.json({ ok: true, partNumber, etag: response.ETag });
   })
 );
@@ -596,11 +670,14 @@ app.post(
   authMiddleware,
   validate(completeSchema),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const { bucket, key, uploadId, parts } = req.body as z.infer<typeof completeSchema>;
-    ensureBucketAllowed(req, bucket);
+    await ensureBucketAllowed(req, bucket);
 
-    const region = await getBucketLocation(bucket);
-    const s3Client = getClientForRegion(region);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    const region = await getBucketLocation(req.user.workspaceId, bucket, creds);
+    const s3Client = getClientForWorkspace(req.user.workspaceId, creds, region);
     const { CompleteMultipartUploadCommand } = await import('@aws-sdk/client-s3');
     await s3Client.send(
       new CompleteMultipartUploadCommand({
@@ -610,8 +687,8 @@ app.post(
         MultipartUpload: { Parts: parts.sort((a, b) => a.PartNumber - b.PartNumber) },
       })
     );
-    markCompleted(uploadId);
-    insertAudit(req.user?.sub ?? null, 'upload_file', `bucket:${bucket}`, { key });
+    await markCompleted(uploadId);
+    await insertAudit(req.user.workspaceId, req.user.sub, 'upload_file', `bucket:${bucket}`, { key });
     res.json({ ok: true, key });
   })
 );
@@ -627,16 +704,19 @@ app.post(
   authMiddleware,
   validate(abortSchema),
   asyncHandler(async (req: AuthRequest, res) => {
+    if (!req.user) throw new AppError('unauthorized', 401);
     const { bucket, key, uploadId } = req.body as z.infer<typeof abortSchema>;
-    ensureBucketAllowed(req, bucket);
+    await ensureBucketAllowed(req, bucket);
 
-    const region = await getBucketLocation(bucket);
-    const s3Client = getClientForRegion(region);
+    const creds = await getWorkspaceCreds(req.user.workspaceId);
+    if (!creds) throw new AppError('workspace_not_configured', 400, 'Workspace AWS credentials not configured');
+    const region = await getBucketLocation(req.user.workspaceId, bucket, creds);
+    const s3Client = getClientForWorkspace(req.user.workspaceId, creds, region);
     const { AbortMultipartUploadCommand } = await import('@aws-sdk/client-s3');
     await s3Client.send(
       new AbortMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: uploadId })
     );
-    markAborted(uploadId);
+    await markAborted(uploadId);
     res.json({ ok: true });
   })
 );
@@ -649,7 +729,7 @@ app.get(
   validate(progressParamSchema, 'params'),
   asyncHandler(async (req: AuthRequest, res) => {
     const { uploadId } = req.params as unknown as z.infer<typeof progressParamSchema>;
-    const session = getSession(uploadId);
+    const session = await getSession(uploadId);
     if (!session) throw new AppError('upload_not_found', 404);
     res.json(session);
   })
@@ -671,7 +751,7 @@ function shutdown(signal: string) {
   server.close((err?: Error) => {
     if (err) logger.error({ err }, 'server_close_error');
     try {
-      db.close();
+      pool.end();
     } catch (e) {
       logger.warn({ err: e }, 'db_close_error');
     }
