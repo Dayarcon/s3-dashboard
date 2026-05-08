@@ -38,6 +38,7 @@ import groupRoutes from './groups';
 import userRoutes from './users';
 import auditRoutes from './audit';
 import metricsRoutes from './metrics';
+import workspaceRoutes from './workspace';
 import {
   getAllowedBucketsForUser,
   insertAudit,
@@ -158,6 +159,7 @@ app.use('/api/groups', groupRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/metrics', metricsRoutes);
+app.use('/api/workspace', workspaceRoutes);
 
 app.get(
   '/api/health',
