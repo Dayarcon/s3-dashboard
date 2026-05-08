@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: s3-dashboard-backend
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      DATABASE_URL: postgresql://postgres:postgres_dev_password@postgres:5432/s3dashboard
+      CREDENTIALS_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      JWT_SECRET: dev_jwt_secret_change_in_production
+      JWT_EXPIRES_IN: 1h
+      CORS_ALLOWLIST: http://localhost:3000
+      LOG_LEVEL: debug
+    ports:
+      - "4000:4000"
+    networks:
+      - s3-dashboard-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  s3-dashboard-network:
+    driver: bridge
