@@ -128,12 +128,12 @@ router.get(
     for (const r of detailedResults) {
       if (r.status !== 'fulfilled') continue;
       const value = r.value as any;
-      for (const sc of value.storageClasses || []) {
-        const key = typeof sc === 'string' ? sc : sc.name || 'unknown';
-        if (!storageClassBreakdown[key]) storageClassBreakdown[key] = { size: 0, count: 0 };
-        if (typeof sc === 'object' && sc.size) {
-          storageClassBreakdown[key].size += sc.size;
-          storageClassBreakdown[key].count += sc.count;
+      const storageClasses = value.storageClasses || {};
+      for (const [scName, scData] of Object.entries(storageClasses)) {
+        if (!storageClassBreakdown[scName]) storageClassBreakdown[scName] = { size: 0, count: 0 };
+        if (typeof scData === 'object' && (scData as any).size) {
+          storageClassBreakdown[scName].size += (scData as any).size;
+          storageClassBreakdown[scName].count += (scData as any).count;
         }
       }
     }
