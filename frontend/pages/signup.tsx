@@ -6,6 +6,7 @@ import { signupWorkspace } from '../lib/api';
 export default function SignupPage() {
   const router = useRouter();
   const [workspaceName, setWorkspaceName] = useState('');
+  const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -18,6 +19,11 @@ export default function SignupPage() {
 
     if (!workspaceName.trim()) {
       setError('Workspace name is required');
+      return;
+    }
+
+    if (!email.trim()) {
+      setError('Email is required');
       return;
     }
 
@@ -43,7 +49,7 @@ export default function SignupPage() {
 
     setLoading(true);
     try {
-      const res = await signupWorkspace(workspaceName, username, password);
+      const res = await signupWorkspace(workspaceName, email, username, password);
       // Save token and workspace ID
       localStorage.setItem('s3dash_token', res.token);
       localStorage.setItem('s3dash_workspace_id', res.user.workspaceId);
@@ -81,6 +87,27 @@ export default function SignupPage() {
               value={workspaceName}
               onChange={(e) => setWorkspaceName(e.target.value)}
               placeholder="My Company"
+              style={{
+                width: '100%',
+                padding: '10px 12px',
+                border: '1px solid #d1d5db',
+                borderRadius: '6px',
+                fontSize: '14px',
+                boxSizing: 'border-box',
+              }}
+              disabled={loading}
+            />
+          </div>
+
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '14px', fontWeight: 500, color: '#374151' }}>
+              Email
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="admin@company.com"
               style={{
                 width: '100%',
                 padding: '10px 12px',

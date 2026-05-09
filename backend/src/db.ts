@@ -130,6 +130,13 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_upload_sessions_workspace_id ON upload_sessions(workspace_id);
     `,
   },
+  {
+    id: '002_add_email_column',
+    sql: `
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
+      CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+    `,
+  },
 ];
 
 // Run all pending migrations

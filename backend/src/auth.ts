@@ -33,6 +33,7 @@ const router = express.Router();
 type User = {
   id: number;
   username: string;
+  email: string;
   password_hash: string;
   role: string;
   is_active: boolean;
@@ -51,20 +52,21 @@ function slugify(name: string): string {
 
 // ---- LOGIN ----
 const loginSchema = z.object({
-  username: z.string().min(1).max(128),
+  email: z.string().email(),
   password: z.string().min(1).max(512),
+  workspaceId: z.number().optional(),
 });
 
 router.post(
   '/login',
   validate(loginSchema),
   asyncHandler(async (req, res) => {
-    const { username, password } = req.body as z.infer<typeof loginSchema>;
+    const { email, password, workspaceId } = req.body as z.infer<typeof loginSchema>;
     const ipKey = `ip:${req.ip}`;
-    const userKey = `user:${username.toLowerCase()}`;
+    const emailKey = `email:${email.toLowerCase()}`;
 
-    // Pre-check lockout on either key.
-    for (const key of [userKey, ipKey]) {
+    // Pre-check lockout on either key
+    for (const key of [emailKey, ipKey]) {
       const { locked, retryAfterMs } = isLocked(key);
       if (locked) {
         if (retryAfterMs) {
@@ -74,55 +76,88 @@ router.post(
       }
     }
 
-    // Find user by username across all workspaces
-    // If user exists in multiple workspaces, use the first one
+    // Find all users with this email
     const result = await pool.query(
-      'SELECT id, username, password_hash, role, is_active, must_change_password, workspace_id FROM users WHERE username = $1 LIMIT 1',
-      [username]
+      'SELECT id, username, email, password_hash, role, is_active, must_change_password, workspace_id FROM users WHERE email = $1 ORDER BY workspace_id',
+      [email]
     );
-    const user = (result.rows[0] as User | undefined);
-    const valid = user && user.is_active && (await bcrypt.compare(password, user.password_hash));
+    const users = (result.rows as User[]);
+
+    // If no users found, reject
+    if (users.length === 0) {
+      recordFailure(emailKey);
+      recordFailure(ipKey);
+      throw new AppError('invalid_credentials', 401, 'Invalid credentials.');
+    }
+
+    // If workspaceId not provided but multiple workspaces exist, return workspace list
+    if (!workspaceId && users.length > 1) {
+      const workspaces = await Promise.all(
+        users.map(async (u) => {
+          const wsResult = await pool.query('SELECT id, name FROM workspaces WHERE id = $1', [u.workspace_id]);
+          return { workspaceId: u.workspace_id, workspaceName: wsResult.rows[0]?.name || 'Unknown' };
+        })
+      );
+      return res.status(200).json({
+        requiresSelection: true,
+        workspaces,
+        message: 'Please select a workspace to continue.',
+      });
+    }
+
+    // Get the user to login (either the one specified by workspaceId or the only one)
+    const targetUser = workspaceId
+      ? users.find((u) => u.workspace_id === workspaceId)
+      : users[0];
+
+    if (!targetUser) {
+      recordFailure(emailKey);
+      recordFailure(ipKey);
+      throw new AppError('invalid_credentials', 401, 'Invalid credentials.');
+    }
+
+    // Validate password
+    const valid = targetUser.is_active && (await bcrypt.compare(password, targetUser.password_hash));
 
     if (!valid) {
-      const lockedUser = recordFailure(userKey);
+      const lockedUser = recordFailure(emailKey);
       const lockedIp = recordFailure(ipKey);
       try {
-        if (user) {
-          await insertAudit(user.workspace_id, user.id, 'login_failed', 'auth', {
-            username,
-            ip: req.ip,
-            locked: lockedUser || lockedIp,
-          });
-        }
+        await insertAudit(targetUser.workspace_id, targetUser.id, 'login_failed', 'auth', {
+          email,
+          ip: req.ip,
+          locked: lockedUser || lockedIp,
+        });
       } catch (e) {
         logger.warn({ err: e }, 'failed_to_audit_login_failure');
       }
       throw new AppError('invalid_credentials', 401, 'Invalid credentials.');
     }
 
-    recordSuccess(userKey);
+    recordSuccess(emailKey);
     recordSuccess(ipKey);
 
     const token = jwt.sign(
       {
-        sub: user!.id,
-        username: user!.username,
-        role: user!.role,
-        workspaceId: user!.workspace_id,
+        sub: targetUser.id,
+        username: targetUser.email,
+        role: targetUser.role,
+        workspaceId: targetUser.workspace_id,
       },
       config.jwtSecret,
       { expiresIn: config.jwtExpiresIn } as jwt.SignOptions
     );
 
-    await insertAudit(user!.workspace_id, user!.id, 'login', 'auth', { ip: req.ip, username });
+    await insertAudit(targetUser.workspace_id, targetUser.id, 'login', 'auth', { ip: req.ip, email });
     res.json({
       token,
       user: {
-        id: user!.id,
-        username: user!.username,
-        role: user!.role,
-        workspaceId: user!.workspace_id,
-        must_change_password: !!user!.must_change_password,
+        id: targetUser.id,
+        email: targetUser.email,
+        username: targetUser.username,
+        role: targetUser.role,
+        workspaceId: targetUser.workspace_id,
+        must_change_password: !!targetUser.must_change_password,
       },
     });
   })
@@ -132,6 +167,7 @@ router.post(
 const signupSchema = z.object({
   workspaceName: z.string().min(1).max(255),
   username: z.string().min(1).max(128),
+  email: z.string().email(),
   password: z.string().min(1).max(512),
 });
 
@@ -139,7 +175,7 @@ router.post(
   '/signup',
   validate(signupSchema),
   asyncHandler(async (req, res) => {
-    const { workspaceName, username, password } = req.body as z.infer<typeof signupSchema>;
+    const { workspaceName, username, email, password } = req.body as z.infer<typeof signupSchema>;
     assertPasswordPolicy(password);
 
     // Generate unique slug
@@ -164,19 +200,28 @@ router.post(
       const workspaceId = wsResult.rows[0].id;
 
       // Check if username already exists in this workspace (shouldn't, but be safe)
-      const existing = await client.query(
+      const existingUsername = await client.query(
         'SELECT id FROM users WHERE workspace_id = $1 AND username = $2',
         [workspaceId, username]
       );
-      if (existing.rows.length > 0) {
+      if (existingUsername.rows.length > 0) {
         throw new AppError('user_exists', 409, 'Username already exists in this workspace.');
+      }
+
+      // Check if email already exists in this workspace
+      const existingEmail = await client.query(
+        'SELECT id FROM users WHERE workspace_id = $1 AND email = $2',
+        [workspaceId, email]
+      );
+      if (existingEmail.rows.length > 0) {
+        throw new AppError('email_exists', 409, 'Email already exists in this workspace.');
       }
 
       // Create admin user
       const hash = await bcrypt.hash(password, config.auth.bcryptRounds);
       const userResult = await client.query(
-        'INSERT INTO users (workspace_id, username, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id',
-        [workspaceId, username, hash, 'admin']
+        'INSERT INTO users (workspace_id, username, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [workspaceId, username, email, hash, 'admin']
       );
       const userId = userResult.rows[0].id;
 
@@ -191,7 +236,8 @@ router.post(
       const token = jwt.sign(
         {
           sub: userId,
-          username,
+          username: email,
+          email,
           role: 'admin',
           workspaceId,
         },
@@ -203,6 +249,7 @@ router.post(
         token,
         user: {
           id: userId,
+          email,
           username,
           role: 'admin',
           workspaceId,
@@ -224,6 +271,7 @@ router.post(
 // ---- INVITE JOIN ----
 const joinSchema = z.object({
   code: z.string().min(1).max(255),
+  email: z.string().email(),
   username: z.string().min(1).max(128),
   password: z.string().min(1).max(512),
 });
@@ -232,7 +280,7 @@ router.post(
   '/join',
   validate(joinSchema),
   asyncHandler(async (req, res) => {
-    const { code, username, password } = req.body as z.infer<typeof joinSchema>;
+    const { code, email, username, password } = req.body as z.infer<typeof joinSchema>;
     assertPasswordPolicy(password);
 
     // Get invite
@@ -265,11 +313,20 @@ router.post(
         throw new AppError('user_exists', 409, 'Username already exists in this workspace.');
       }
 
+      // Check email doesn't exist in this workspace
+      const existingEmail = await client.query(
+        'SELECT id FROM users WHERE workspace_id = $1 AND email = $2',
+        [workspaceId, email]
+      );
+      if (existingEmail.rows.length > 0) {
+        throw new AppError('email_exists', 409, 'Email already exists in this workspace.');
+      }
+
       // Create user
       const hash = await bcrypt.hash(password, config.auth.bcryptRounds);
       const userResult = await client.query(
-        'INSERT INTO users (workspace_id, username, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id',
-        [workspaceId, username, hash, invite.role]
+        'INSERT INTO users (workspace_id, username, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [workspaceId, username, email, hash, invite.role]
       );
       const userId = userResult.rows[0].id;
 
@@ -282,7 +339,7 @@ router.post(
       // Log audit
       await client.query(
         'INSERT INTO audit_logs (workspace_id, user_id, action, resource, details) VALUES ($1, $2, $3, $4, $5)',
-        [workspaceId, userId, 'invite_accepted', 'auth', JSON.stringify({ code })]
+        [workspaceId, userId, 'invite_accepted', 'auth', JSON.stringify({ code, email })]
       );
 
       await client.query('COMMIT');
@@ -290,7 +347,7 @@ router.post(
       const token = jwt.sign(
         {
           sub: userId,
-          username,
+          username: email,
           role: invite.role,
           workspaceId,
         },
@@ -302,6 +359,7 @@ router.post(
         token,
         user: {
           id: userId,
+          email,
           username,
           role: invite.role,
           workspaceId,

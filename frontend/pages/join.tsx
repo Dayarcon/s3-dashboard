@@ -6,6 +6,7 @@ export default function JoinPage() {
   const router = useRouter();
   const { code } = router.query;
   const [workspaceName, setWorkspaceName] = useState('');
+  const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -36,6 +37,11 @@ export default function JoinPage() {
     e.preventDefault();
     setError('');
 
+    if (!email.trim()) {
+      setError('Email is required');
+      return;
+    }
+
     if (!username.trim()) {
       setError('Username is required');
       return;
@@ -58,7 +64,7 @@ export default function JoinPage() {
 
     setLoading(true);
     try {
-      const res = await joinWorkspace(code as string, username, password);
+      const res = await joinWorkspace(code as string, email, username, password);
       localStorage.setItem('s3dash_token', res.token);
       localStorage.setItem('s3dash_workspace_id', res.user.workspaceId);
       localStorage.setItem('s3dash_user', JSON.stringify(res.user));
@@ -113,6 +119,27 @@ export default function JoinPage() {
         )}
 
         <form onSubmit={handleJoin}>
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '14px', fontWeight: 500, color: '#374151' }}>
+              Email
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="your@email.com"
+              style={{
+                width: '100%',
+                padding: '10px 12px',
+                border: '1px solid #d1d5db',
+                borderRadius: '6px',
+                fontSize: '14px',
+                boxSizing: 'border-box',
+              }}
+              disabled={loading}
+            />
+          </div>
+
           <div style={{ marginBottom: '16px' }}>
             <label style={{ display: 'block', marginBottom: '6px', fontSize: '14px', fontWeight: 500, color: '#374151' }}>
               Username

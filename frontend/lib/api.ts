@@ -186,21 +186,23 @@ export async function getBucketMetrics() {
     return res.data;
   }
 
-  export async function joinWorkspace(code: string, username: string, password: string) {
+  export async function joinWorkspace(code: string, email: string, username: string, password: string) {
     const api = axios.create({ baseURL: process.env.NEXT_PUBLIC_BACKEND_URL });
-    const res = await api.post('/auth/join', { code, username, password });
+    const res = await api.post('/auth/join', { code, email, username, password });
     return res.data;
   }
 
   // Auth APIs
-  export async function signupWorkspace(workspaceName: string, username: string, password: string) {
+  export async function signupWorkspace(workspaceName: string, email: string, username: string, password: string) {
     const api = axios.create({ baseURL: process.env.NEXT_PUBLIC_BACKEND_URL });
-    const res = await api.post('/auth/signup', { workspaceName, username, password });
+    const res = await api.post('/auth/signup', { workspaceName, email, username, password });
     return res.data;
   }
 
-  export async function login(username: string, password: string) {
+  export async function login(email: string, password: string, workspaceId?: number) {
     const api = axios.create({ baseURL: process.env.NEXT_PUBLIC_BACKEND_URL });
-    const res = await api.post('/auth/login', { username, password });
+    const payload: any = { email, password };
+    if (workspaceId) payload.workspaceId = workspaceId;
+    const res = await api.post('/auth/login', payload);
     return res.data;
   }
