@@ -206,3 +206,46 @@ export async function getBucketMetrics() {
     const res = await api.post('/auth/login', payload);
     return res.data;
   }
+
+  // Workspace Discovery APIs
+  export async function searchWorkspaces(query: string) {
+    const api = axios.create({ baseURL: process.env.NEXT_PUBLIC_BACKEND_URL });
+    const res = await api.get(`/api/workspace/search?q=${encodeURIComponent(query)}`);
+    return res.data;
+  }
+
+  export async function submitJoinRequest(workspaceId: number, email: string, username: string, fullName?: string) {
+    const api = axios.create({ baseURL: process.env.NEXT_PUBLIC_BACKEND_URL });
+    const res = await api.post('/api/workspace/join-request', {
+      workspaceId,
+      email,
+      username,
+      fullName,
+    });
+    return res.data;
+  }
+
+  export async function getWorkspaceAdmins(workspaceId: number) {
+    const api = axios.create({ baseURL: process.env.NEXT_PUBLIC_BACKEND_URL });
+    const res = await api.get(`/api/workspace/${workspaceId}/admins`);
+    return res.data;
+  }
+
+  // Admin functions for managing join requests
+  export async function getPendingJoinRequests() {
+    const api = axiosWithAuth();
+    const res = await api.get('/api/workspace/join-requests');
+    return res.data;
+  }
+
+  export async function approveJoinRequest(requestId: number) {
+    const api = axiosWithAuth();
+    const res = await api.patch(`/api/workspace/join-request/${requestId}/approve`);
+    return res.data;
+  }
+
+  export async function rejectJoinRequest(requestId: number) {
+    const api = axiosWithAuth();
+    const res = await api.patch(`/api/workspace/join-request/${requestId}/reject`);
+    return res.data;
+  }

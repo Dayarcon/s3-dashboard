@@ -14,8 +14,12 @@ import {
   getAllowedBucketsForUser,
   createWorkspace,
   getWorkspace,
+  getWorkspaceByDomain,
+  setWorkspaceDomain,
+  getWorkspaceAdmins,
   getInviteByCode,
   markInviteAsUsed,
+  createJoinRequest,
   listUsers,
   updateUser,
   pool,
@@ -178,24 +182,37 @@ router.post(
     const { workspaceName, username, email, password } = req.body as z.infer<typeof signupSchema>;
     assertPasswordPolicy(password);
 
-    // Generate unique slug
-    let slug = slugify(workspaceName);
-    let counter = 0;
-    while (counter < 100) {
-      const existing = await getWorkspace(0); // Just a test query; better approach below
-      // Actually, let's try to create and catch unique violation
-      break;
+    // Extract domain from email
+    const emailDomain = email.split('@')[1];
+
+    // Check if workspace already exists for this domain
+    const existingWorkspace = await getWorkspaceByDomain(emailDomain);
+    if (existingWorkspace) {
+      // Workspace found for this domain - return discovery response
+      const admins = await getWorkspaceAdmins(existingWorkspace.id);
+      return res.status(200).json({
+        workspaceFound: true,
+        workspace: {
+          id: existingWorkspace.id,
+          name: existingWorkspace.name,
+          admins: admins.map((a) => ({ id: a.id, email: a.email, username: a.username })),
+        },
+        message: `A workspace "${existingWorkspace.name}" already exists for your organization. Contact an admin to request access.`,
+      });
     }
+
+    // Generate unique slug
+    const slug = slugify(workspaceName);
 
     // Create workspace and first user in a transaction
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      // Create workspace
+      // Create workspace with domain
       const wsResult = await client.query(
-        'INSERT INTO workspaces (name, slug) VALUES ($1, $2) RETURNING id',
-        [workspaceName, slug]
+        'INSERT INTO workspaces (name, slug, organization_domain) VALUES ($1, $2, $3) RETURNING id',
+        [workspaceName, slug, emailDomain]
       );
       const workspaceId = wsResult.rows[0].id;
 

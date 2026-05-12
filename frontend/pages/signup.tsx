@@ -12,6 +12,8 @@ export default function SignupPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [workspaceFound, setWorkspaceFound] = useState(false);
+  const [existingWorkspace, setExistingWorkspace] = useState<any>(null);
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,6 +52,15 @@ export default function SignupPage() {
     setLoading(true);
     try {
       const res = await signupWorkspace(workspaceName, email, username, password);
+
+      // Check if workspace was found instead of created
+      if (res.workspaceFound) {
+        setWorkspaceFound(true);
+        setExistingWorkspace(res.workspace);
+        setLoading(false);
+        return;
+      }
+
       // Save token and workspace ID
       localStorage.setItem('s3dash_token', res.token);
       localStorage.setItem('s3dash_workspace_id', res.user.workspaceId);
@@ -63,6 +74,86 @@ export default function SignupPage() {
       setLoading(false);
     }
   };
+
+  if (workspaceFound && existingWorkspace) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f9fafb' }}>
+        <div style={{ width: '100%', maxWidth: '450px', padding: '24px', backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <h1 style={{ fontSize: '24px', fontWeight: 600, marginBottom: '16px', textAlign: 'center', color: '#111827' }}>
+            Workspace Found
+          </h1>
+          <p style={{ fontSize: '14px', color: '#6b7280', textAlign: 'center', marginBottom: '24px' }}>
+            A workspace for your organization already exists!
+          </p>
+
+          <div style={{
+            backgroundColor: '#eff6ff',
+            border: '1px solid #bfdbfe',
+            borderRadius: '8px',
+            padding: '16px',
+            marginBottom: '24px'
+          }}>
+            <p style={{ fontSize: '16px', fontWeight: 600, color: '#1e40af', marginTop: 0, marginBottom: '12px' }}>
+              {existingWorkspace.name}
+            </p>
+            <p style={{ fontSize: '14px', color: '#6b7280', marginTop: 0, marginBottom: '12px' }}>
+              Contact one of the workspace admins to request access:
+            </p>
+            <div style={{ marginLeft: '8px' }}>
+              {existingWorkspace.admins?.map((admin: any, idx: number) => (
+                <div key={idx} style={{ fontSize: '13px', color: '#374151', marginBottom: '8px' }}>
+                  <strong>{admin.username}</strong> ({admin.email})
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <button
+            onClick={() => router.push(`/join-workspace?email=${encodeURIComponent(email)}`)}
+            style={{
+              width: '100%',
+              padding: '10px 16px',
+              backgroundColor: '#4f46e5',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              fontSize: '14px',
+              fontWeight: 500,
+              cursor: 'pointer',
+              marginBottom: '12px',
+            }}
+          >
+            Request to Join
+          </button>
+
+          <button
+            onClick={() => {
+              setWorkspaceFound(false);
+              setExistingWorkspace(null);
+              setWorkspaceName('');
+              setEmail('');
+              setUsername('');
+              setPassword('');
+              setConfirmPassword('');
+            }}
+            style={{
+              width: '100%',
+              padding: '10px 16px',
+              backgroundColor: 'white',
+              color: '#4f46e5',
+              border: '1px solid #4f46e5',
+              borderRadius: '6px',
+              fontSize: '14px',
+              fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            Back
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f9fafb' }}>
@@ -118,6 +209,9 @@ export default function SignupPage() {
               }}
               disabled={loading}
             />
+            <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '6px', margin: '6px 0 0 0' }}>
+              We'll check if your organization already exists
+            </p>
           </div>
 
           <div style={{ marginBottom: '16px' }}>
@@ -199,7 +293,7 @@ export default function SignupPage() {
               marginBottom: '16px',
             }}
           >
-            {loading ? 'Creating...' : 'Create Workspace'}
+            {loading ? 'Checking...' : 'Create Workspace'}
           </button>
         </form>
 

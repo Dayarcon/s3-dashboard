@@ -137,6 +137,31 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
     `,
   },
+  {
+    id: '003_add_workspace_discovery',
+    sql: `
+      ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS organization_domain TEXT;
+      CREATE INDEX IF NOT EXISTS idx_workspaces_domain ON workspaces(organization_domain);
+
+      CREATE TABLE IF NOT EXISTS join_requests (
+        id SERIAL PRIMARY KEY,
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        email TEXT NOT NULL,
+        username TEXT NOT NULL,
+        full_name TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        reviewed_at TIMESTAMPTZ,
+        reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        UNIQUE (workspace_id, email),
+        CHECK (status IN ('pending', 'approved', 'rejected'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_join_requests_workspace_id ON join_requests(workspace_id);
+      CREATE INDEX IF NOT EXISTS idx_join_requests_status ON join_requests(status);
+      CREATE INDEX IF NOT EXISTS idx_join_requests_email ON join_requests(email);
+    `,
+  },
 ];
 
 // Run all pending migrations
@@ -273,6 +298,37 @@ export async function updateWorkspaceCredentials(
   );
 }
 
+export async function getWorkspaceByDomain(domain: string): Promise<any> {
+  const result = await pool.query(
+    'SELECT * FROM workspaces WHERE organization_domain = $1',
+    [domain]
+  );
+  return result.rows[0];
+}
+
+export async function setWorkspaceDomain(workspaceId: number, domain: string): Promise<void> {
+  await pool.query(
+    'UPDATE workspaces SET organization_domain = $1 WHERE id = $2',
+    [domain, workspaceId]
+  );
+}
+
+export async function searchWorkspaces(searchTerm: string): Promise<any[]> {
+  const result = await pool.query(
+    'SELECT id, name, organization_domain FROM workspaces WHERE name ILIKE $1 OR organization_domain ILIKE $1 LIMIT 10',
+    [`%${searchTerm}%`]
+  );
+  return result.rows;
+}
+
+export async function getWorkspaceAdmins(workspaceId: number): Promise<any[]> {
+  const result = await pool.query(
+    'SELECT id, username, email FROM users WHERE workspace_id = $1 AND role = $2',
+    [workspaceId, 'admin']
+  );
+  return result.rows;
+}
+
 // ---- Workspace invite functions ----
 
 export async function createInvite(
@@ -302,6 +358,60 @@ export async function markInviteAsUsed(id: number, usedBy: number): Promise<void
     'UPDATE workspace_invites SET used_at = NOW(), used_by = $1 WHERE id = $2',
     [usedBy, id]
   );
+}
+
+// ---- Join request functions ----
+
+export async function createJoinRequest(
+  workspaceId: number,
+  email: string,
+  username: string,
+  fullName?: string
+): Promise<number> {
+  const result = await pool.query(
+    'INSERT INTO join_requests (workspace_id, email, username, full_name) VALUES ($1, $2, $3, $4) RETURNING id',
+    [workspaceId, email, username, fullName || null]
+  );
+  return result.rows[0].id;
+}
+
+export async function getJoinRequest(id: number): Promise<any> {
+  const result = await pool.query('SELECT * FROM join_requests WHERE id = $1', [id]);
+  return result.rows[0];
+}
+
+export async function getJoinRequestsByWorkspace(workspaceId: number, status?: string): Promise<any[]> {
+  let query = 'SELECT * FROM join_requests WHERE workspace_id = $1';
+  const params: any[] = [workspaceId];
+  if (status) {
+    query += ' AND status = $2';
+    params.push(status);
+  }
+  query += ' ORDER BY requested_at DESC';
+  const result = await pool.query(query, params);
+  return result.rows;
+}
+
+export async function approveJoinRequest(id: number, reviewedBy: number): Promise<void> {
+  await pool.query(
+    'UPDATE join_requests SET status = $1, reviewed_at = NOW(), reviewed_by = $2 WHERE id = $3',
+    ['approved', reviewedBy, id]
+  );
+}
+
+export async function rejectJoinRequest(id: number, reviewedBy: number): Promise<void> {
+  await pool.query(
+    'UPDATE join_requests SET status = $1, reviewed_at = NOW(), reviewed_by = $2 WHERE id = $3',
+    ['rejected', reviewedBy, id]
+  );
+}
+
+export async function getJoinRequestByWorkspaceAndEmail(workspaceId: number, email: string): Promise<any> {
+  const result = await pool.query(
+    'SELECT * FROM join_requests WHERE workspace_id = $1 AND email = $2',
+    [workspaceId, email]
+  );
+  return result.rows[0];
 }
 
 // ---- Audit log functions ----
